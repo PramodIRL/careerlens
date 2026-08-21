@@ -17,6 +17,26 @@ jobs:
     defaults:
       run:
         working-directory: apps/api
+    # Required for the DB readiness tests (tests/test_health_db.py), which
+    # need a real Postgres to connect to. No credentials here beyond a
+    # throwaway local password for this ephemeral CI container — it matches
+    # app/settings.py's own defaults, so no env vars need to be passed to
+    # the job; localhost is reachable because service containers are
+    # published to the runner host, and no `container:` is set on this job.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: careerlens
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: careerlens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U careerlens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +54,9 @@ jobs:
 
       - name: Typecheck
         run: uv run mypy app
+
+      - name: Run migrations
+        run: uv run alembic upgrade head
 
       - name: Test
         run: uv run pytest
