@@ -2,21 +2,13 @@
 
 import { useEffect, useState } from "react";
 
+import {
+  STATUS_LABEL,
+  STATUS_STYLES,
+  type HealthStatus,
+} from "@/lib/health-status";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-type HealthStatus = "checking" | "ok" | "error";
-
-const STATUS_STYLES: Record<HealthStatus, string> = {
-  checking: "bg-zinc-200 text-zinc-800",
-  ok: "bg-green-100 text-green-800",
-  error: "bg-red-100 text-red-800",
-};
-
-const STATUS_LABEL: Record<HealthStatus, string> = {
-  checking: "Checking API…",
-  ok: "API is healthy",
-  error: "API is unreachable",
-};
 
 export default function Home() {
   const [status, setStatus] = useState<HealthStatus>("checking");

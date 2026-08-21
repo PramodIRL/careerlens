@@ -23,6 +23,11 @@ repository.
   host directly, not in Docker, for easier debugging.
 - **`.env.example`** — Names of environment variables used across the stack.
   Copy to `.env` and fill in local values; never commit real secrets.
+- **`Makefile`** — Shortcuts for formatting, linting, typechecking, testing,
+  and starting/stopping services. Run `make help` to list them.
+- **`.github/workflows/`** — CI: `web-ci.yml` and `api-ci.yml` each run only
+  when files under their app change, checking format, lint, typecheck, and
+  tests. No credentials or deployment steps.
 
 ## First run
 
@@ -60,16 +65,36 @@ Open http://localhost:3000 — the home page shows whether it can reach the API
 health endpoint. If your API runs on a non-default URL, create
 `apps/web/.env.local` with `NEXT_PUBLIC_API_URL=<url>`.
 
-## Tests
+## Quality gates
+
+All commands work per-app or via the root `Makefile` (`make help` for the
+full list).
+
+| Gate | Web (`apps/web`) | API (`apps/api`) |
+|---|---|---|
+| Format | `npm run format` / `format:check` | `uv run ruff format .` / `--check` |
+| Lint | `npm run lint` | `uv run ruff check .` |
+| Typecheck | `npm run typecheck` (tsc) | `uv run mypy app` |
+| Test | `npm run test` (Vitest) | `uv run pytest` |
+
+Or, from the repo root:
 
 ```bash
-cd apps/api
-uv run pytest
+make format-check
+make lint
+make typecheck
+make test
 ```
 
-## Checks
+CI runs the same commands automatically in `.github/workflows/web-ci.yml` and
+`api-ci.yml`, scoped to only run when files in the corresponding app change.
+Neither workflow uses real credentials or deploys anything.
+
+## Start / stop
 
 ```bash
-cd apps/api && uv run ruff check .
-cd apps/web && npm run lint && npx tsc --noEmit
+make start      # Postgres + Redis via Docker Compose
+make start-web  # Next.js dev server (separate terminal)
+make start-api  # FastAPI dev server (separate terminal)
+make stop       # stop the Docker Compose data services
 ```
