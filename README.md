@@ -28,6 +28,9 @@ repository.
 - **`.github/workflows/`** — CI: `web-ci.yml` and `api-ci.yml` each run only
   when files under their app change, checking format, lint, typecheck, and
   tests. No credentials or deployment steps.
+- **`scripts/smoke.sh`** — End-to-end developer smoke test: starts data
+  services, migrates, starts the API and web app, verifies them, shuts
+  everything down. Run via `make smoke`.
 
 ## First run
 
@@ -68,6 +71,35 @@ npm run dev
 Open http://localhost:3000 — the home page shows whether it can reach the API
 health endpoint. If your API runs on a non-default URL, create
 `apps/web/.env.local` with `NEXT_PUBLIC_API_URL=<url>`.
+
+## Smoke test
+
+`make smoke` (or `./scripts/smoke.sh`) proves the whole foundation works
+with one command: it starts the Docker data services, applies migrations,
+starts the API and web app, checks the API's liveness and readiness
+endpoints, checks the API's CORS policy would actually let the web page's
+browser reach it, checks the web page serves the expected health-check
+markup — then shuts everything back down, whether it passed or failed.
+
+```bash
+make smoke
+# or, to use different ports if the defaults are busy:
+API_PORT=8001 WEB_PORT=3001 ./scripts/smoke.sh
+```
+
+**What it does *not* prove:** the script never executes JavaScript, so it
+can't see the web page's fetch actually resolve to "API is healthy" the way
+a real browser would — and by the time it prints its summary, it's already
+shutting the servers back down, so there's nothing left running to look at
+anyway. That final visual confirmation is a separate, manual step:
+
+1. `make start` (data services)
+2. `make start-api` (separate terminal)
+3. `make start-web` (separate terminal)
+4. Open http://localhost:3000 and confirm it shows **"API is healthy"**
+
+Unlike the smoke test, these stay running until you stop them yourself
+(`make stop`, then `Ctrl-C` the other two).
 
 ## Migrations
 
@@ -123,4 +155,43 @@ make start      # Postgres + Redis via Docker Compose
 make start-web  # Next.js dev server (separate terminal)
 make start-api  # FastAPI dev server (separate terminal)
 make stop       # stop the Docker Compose data services
+```
+
+## Troubleshooting
+
+**Docker daemon not running / unavailable**
+`docker info` (which `scripts/smoke.sh` checks first) fails with something
+like `Cannot connect to the Docker daemon`. Open Docker Desktop and wait
+for it to report "running," then retry.
+
+**A port is already in use**
+`Error: listen EADDRINUSE` (web), `[Errno 48] Address already in use` (API),
+or Postgres/Redis failing to start on 5432/6379 usually means another
+process already owns that port. Find and stop it, or use a different port:
+
+```bash
+lsof -i :3000          # find what's using a port (swap in 5432/6379/8000/etc.)
+kill <PID>              # stop it, if that's safe to do
+```
+
+Or override the port instead of hunting down the process:
+- Postgres/Redis: set `POSTGRES_PORT` / `REDIS_PORT` in `.env` before
+  `docker compose up -d`.
+- API/web (including the smoke test): set `API_PORT` / `WEB_PORT`, e.g.
+  `API_PORT=8001 WEB_PORT=3001 make smoke`.
+
+**A migration fails**
+Run `make migrate-status` to see what's currently applied. If Postgres
+isn't up yet (`make start` first), migrations will fail to connect —
+that's the most common cause.
+
+**`scripts/smoke.sh` seems to hang or leaves things running**
+It has a 30–60 second timeout per step and always tears down on exit
+(success, failure, or Ctrl-C) via a trap — but if it's ever killed with
+`kill -9` (which can't be trapped), clean up manually:
+
+```bash
+make stop                        # stop Docker data services
+lsof -ti :8000 | xargs kill       # stop a stray API process
+lsof -ti :3000 | xargs kill       # stop a stray web process
 ```
