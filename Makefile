@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api services-up stop services-down
+.PHONY: help format format-check lint typecheck test start start-web start-api services-up stop services-down migrate migration migrate-status
 
 help:
 	@echo "CareerLens — available commands:"
@@ -11,6 +11,9 @@ help:
 	@echo "  make start-web      Run the Next.js dev server (host, foreground)"
 	@echo "  make start-api      Run the FastAPI dev server (host, foreground)"
 	@echo "  make stop           Stop the Docker Compose data services"
+	@echo "  make migrate        Apply all pending Alembic migrations"
+	@echo "  make migrate-status Show the current Alembic migration"
+	@echo "  make migration name=\"...\"  Create a new (blank) migration"
 
 format:
 	cd apps/web && npm run format
@@ -53,3 +56,12 @@ stop: services-down
 
 services-down:
 	docker compose down
+
+migrate:
+	cd apps/api && uv run alembic upgrade head
+
+migrate-status:
+	cd apps/api && uv run alembic current
+
+migration:
+	cd apps/api && uv run alembic revision -m "$(name)"

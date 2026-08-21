@@ -51,7 +51,11 @@ uv sync
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
-Health check: http://localhost:8000/api/v1/health
+- Liveness: http://localhost:8000/api/v1/health — the API process is up.
+- Readiness: http://localhost:8000/api/v1/health/db — the database is
+  reachable. Returns `200 {"status": "ok"}`, or `503
+  {"status": "degraded", "detail": "database unavailable"}` if not (never
+  including connection details or credentials in the response).
 
 ### 3. Run the web app
 
@@ -65,6 +69,23 @@ Open http://localhost:3000 — the home page shows whether it can reach the API
 health endpoint. If your API runs on a non-default URL, create
 `apps/web/.env.local` with `NEXT_PUBLIC_API_URL=<url>`.
 
+## Migrations
+
+Schema changes are tracked with [Alembic](https://alembic.sqlalchemy.org/).
+The only migration so far enables the `pgvector` Postgres extension — no
+product tables exist yet.
+
+```bash
+make migrate                    # apply all pending migrations
+make migrate-status             # show the currently applied migration
+make migration name="add x"     # create a new, empty migration to fill in
+```
+
+Or directly: `cd apps/api && uv run alembic upgrade head` (etc.). Migrations
+read the database URL from `app/settings.py` (environment variables / the
+repo-root `.env`), never from a hard-coded connection string in
+`alembic.ini`.
+
 ## Quality gates
 
 All commands work per-app or via the root `Makefile` (`make help` for the
@@ -76,6 +97,11 @@ full list).
 | Lint | `npm run lint` | `uv run ruff check .` |
 | Typecheck | `npm run typecheck` (tsc) | `uv run mypy app` |
 | Test | `npm run test` (Vitest) | `uv run pytest` |
+
+`apps/api` tests need a reachable Postgres (`make start`, or
+`docker compose up -d postgres`) — they run against an isolated
+`careerlens_test` schema in the same database, created and dropped
+automatically by the test suite, so they never touch dev data.
 
 Or, from the repo root:
 
