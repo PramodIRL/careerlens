@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api services-up stop services-down migrate migration migrate-status
+.PHONY: help format format-check lint typecheck test start start-web start-api services-up stop services-down migrate migration migrate-status smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make migrate        Apply all pending Alembic migrations"
 	@echo "  make migrate-status Show the current Alembic migration"
 	@echo "  make migration name=\"...\"  Create a new (blank) migration"
+	@echo "  make smoke          Run the end-to-end developer smoke test"
 
 format:
 	cd apps/web && npm run format
@@ -65,3 +66,6 @@ migrate-status:
 
 migration:
 	cd apps/api && uv run alembic revision -m "$(name)"
+
+smoke:
+	./scripts/smoke.sh

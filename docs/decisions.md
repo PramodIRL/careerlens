@@ -46,4 +46,23 @@ Add one entry per decision, most recent first.
 - **Outcome**: Kept both — `init.sql` for convenient local container
   first-boot, the migration as the portable, authoritative schema history.
 
+- **Date**: 2026-08-22
+- **Decision**: Verify "the web page can reach the API" in `scripts/smoke.sh`
+  via `curl` (checking the API's CORS response header and the web page's
+  HTML markup), instead of a headless browser.
+- **Problem**: The web page's health check runs client-side (`"use client"`
+  + `useEffect`), so no plain HTTP request can observe the *resolved*
+  "API is healthy" text the way a real browser would after executing
+  JavaScript.
+- **Alternatives**: Add Playwright/Puppeteer and actually render the page.
+- **Trade-off**: A headless browser would give a direct, literal answer,
+  but is a new, fairly heavy dependency for a "minimal" smoke test at this
+  stage. The `curl`-based check instead verifies the exact mechanism that
+  would make or break the page's fetch in a real browser (CORS) plus that
+  the expected component actually renders into the served HTML — a real,
+  specific check, just not a literal one. The gap (JS execution) is covered
+  by a documented manual step instead.
+- **Outcome**: `curl`-based CORS + markup checks, zero new dependencies;
+  manual browser confirmation documented in `README.md` as the final step.
+
 <!-- Add new entries above this line, most recent first. -->
