@@ -181,4 +181,45 @@ Add one entry per decision, most recent first.
   callers share the one request. Covered by
   `api-client.test.ts` (`refresh > deduplicates concurrent calls...`).
 
+- **Date**: 2026-08-22
+- **Decision**: Tolerate reuse of a revoked refresh token — without
+  cascading revocation — only when it is *structurally* the immediate,
+  still-active predecessor of the current token (via a new
+  `replaced_by_id` link) *and* was revoked within a short configurable
+  window (`AUTH_REFRESH_REUSE_GRACE_SECONDS`, default 5s). Rotation now
+  uses `SELECT ... FOR UPDATE` to serialize concurrent attempts on the
+  same token row.
+- **Problem**: The client-side fix above (deduplicating same-page
+  concurrent calls) doesn't help across two independent JS contexts —
+  two rapid page reloads, or two browser tabs, each still holding the
+  same pre-rotation cookie when they fire their own `/refresh`. Live
+  reproduction confirmed: the losing request's failure was cascading
+  the whole session, including the token the winning request had just
+  issued. Proven live and via `test_concurrent_refresh_with_same_token_
+  one_wins_one_loses_and_session_survives`.
+- **Alternatives considered**: (1) A pure time-based grace period with
+  no structural check — tolerates *any* recently-revoked token, which
+  in a rapid-reload loop could accidentally tolerate a token several
+  generations old. (2) Structural adjacency with no time bound —
+  doesn't decay: a long-idle session's one-hop-back predecessor would
+  stay tolerable indefinitely, a wider window than a short grace period
+  gives. (3) Transparently handing the race-loser the winner's live
+  token pair instead of a 401 — fully seamless UX, but adds a new path
+  that returns real credentials from what's structurally an error
+  condition; rejected in favor of the smaller, lower-risk change.
+- **Trade-off**: `AUTH_REFRESH_REUSE_GRACE_SECONDS` trades security for
+  UX in one narrow, bounded way — a stolen token that is *both* the
+  exact immediate predecessor *and* replayed within this window is
+  tolerated as if benign. Kept deliberately short (default 5s): ample
+  for realistic browser/network race timing, not for an attacker who
+  wasn't already racing the legitimate client in real time. Anything
+  structurally older, or replayed later, is unaffected — full cascade,
+  exactly as before.
+- **Outcome**: `refresh_tokens.replaced_by_id` (migration
+  `6826a2b31fcd`), `with_for_update()` on rotation, benign-race check in
+  `app/api/v1/auth.py`. No frontend change — the API contract (request/
+  response shape) is unchanged. Regression tests cover the race
+  (concurrent + sequential), multi-generation reuse, and reuse after the
+  grace window, each still triggering the original cascade behavior.
+
 <!-- Add new entries above this line, most recent first. -->

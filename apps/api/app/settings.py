@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     auth_rate_limit_max_requests: int = 10
     auth_rate_limit_window_seconds: int = 60
 
+    # How long a just-rotated refresh token is still tolerated if
+    # presented again, provided it's exactly the immediate predecessor
+    # of the still-active token that replaced it (see
+    # app/api/v1/auth.py). Covers a legitimate concurrent-refresh race
+    # (two rapid page reloads, or two tabs, both firing from the same
+    # starting cookie) without weakening detection of genuine reuse —
+    # anything older than one generation, or reused after this window,
+    # still revokes the whole session. Security/UX trade-off: larger
+    # values tolerate slower/laggier races (better UX) but also widen
+    # the window an attacker with a freshly-rotated-away token could
+    # exploit before compromise handling kicks in (weaker security);
+    # keep this small — a few seconds covers realistic browser/network
+    # timing without meaningfully helping an attacker.
+    auth_refresh_reuse_grace_seconds: int = 5
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""
