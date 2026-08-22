@@ -108,10 +108,15 @@ Email/password auth, under `/api/v1/auth`:
 | Endpoint | Purpose |
 |---|---|
 | `POST /register` | Create an account. Duplicate email → `409`. |
-| `POST /login` | Returns an access token (JWT, 15 min) + refresh token (opaque, 30 days). Wrong email *or* wrong password → identical generic `401` — no signal about which was wrong. |
-| `POST /refresh` | Exchanges a refresh token for a new pair, revoking the old one (rotation). Reusing an already-used refresh token revokes the *entire* session as a compromise signal. |
-| `POST /logout` | Revokes a refresh token immediately. |
+| `POST /login` | Sets the refresh token as an `HttpOnly` cookie; returns `{access_token, token_type, expires_in}` in the body — never the raw refresh token. Wrong email *or* wrong password → identical generic `401`. |
+| `POST /refresh` | Reads the refresh token from the cookie (no request body), rotates it (new cookie, old one revoked). Reusing an already-used refresh token revokes the *entire* session as a compromise signal. |
+| `POST /logout` | Revokes and clears the refresh cookie. Idempotent — safe to call with no session. |
 | `GET /me` | Protected route — requires `Authorization: Bearer <access_token>`. |
+
+The refresh-token cookie is `HttpOnly` (invisible to JavaScript — the
+whole point), `Secure`, `SameSite=Lax`, scoped to `/api/v1/auth`. The
+access token lives in memory only in the web app, never `localStorage`
+or a cookie. See `docs/decisions.md` for the full design rationale.
 
 Register/login/refresh share an in-memory rate limit (10 requests/60s per
 client IP by default) — see `app/rate_limit.py` for why this is
@@ -120,6 +125,14 @@ single-process only, not yet suitable for a multi-instance deployment.
 Passwords are hashed with bcrypt; refresh tokens are stored only as a
 SHA-256 hash of the random value handed to the client — see
 `app/security.py` for why neither is ever stored as-is.
+
+### Web pages
+
+`/register`, `/login`, and the protected `/dashboard` (redirects to
+`/login` if there's no valid session) live in `apps/web/src/app/`.
+`src/lib/auth-context.tsx` holds the in-memory session and silently
+retries a refresh once on mount, so a page reload doesn't look
+logged-out as long as the cookie is still valid.
 
 ## Migrations
 

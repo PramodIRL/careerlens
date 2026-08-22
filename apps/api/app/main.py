@@ -22,6 +22,12 @@ app.add_middleware(
     # refresh/logout) — health was GET-only before this.
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
+    # Prompt 1.2: the browser auth flow relies on an HttpOnly refresh-
+    # token cookie, which the browser only attaches to (and accepts
+    # Set-Cookie from) cross-origin requests when the response opts in
+    # here. Requires allow_origins to stay an explicit list, never "*" —
+    # already true via _allowed_origins() above.
+    allow_credentials=True,
 )
 
 app.include_router(health_router, prefix="/api/v1")

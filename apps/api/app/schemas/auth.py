@@ -32,13 +32,15 @@ class LoginRequest(BaseModel):
     _check_password_byte_length = field_validator("password")(_validate_password_byte_length)
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
+class AccessTokenResponse(BaseModel):
+    """Login/refresh response body.
 
+    Deliberately has no refresh_token field — the browser flow (Prompt
+    1.2) carries the refresh token only in an HttpOnly cookie, never in
+    JSON a script on the page could read. See app/api/v1/auth.py.
+    """
 
-class TokenPairResponse(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
     expires_in: int
 
