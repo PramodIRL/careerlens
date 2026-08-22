@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import {
@@ -60,6 +61,17 @@ export default function Home() {
           {detail}
         </p>
       )}
+      <nav aria-label="Account" className="flex gap-4 text-sm">
+        <Link href="/login" className="underline">
+          Log in
+        </Link>
+        <Link href="/register" className="underline">
+          Register
+        </Link>
+        <Link href="/dashboard" className="underline">
+          Dashboard
+        </Link>
+      </nav>
     </main>
   );
 }

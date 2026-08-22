@@ -42,18 +42,27 @@ def isolated_schema_override() -> Callable[[], AsyncGenerator[AsyncSession, None
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
-    """A TestClient used as a context manager.
+    """A TestClient used as a context manager, with an https:// base URL.
 
-    Starlette's TestClient only keeps a stable event loop/portal alive
-    for the lifetime of its `with` block. Without this, a test that
-    makes more than one request can fail on the second call with
-    "Event loop is closed" — the app's async DB engine's pooled
-    connections stay bound to the first (by-then-closed) loop. This only
-    surfaces in multi-request tests (first hit in Prompt 1.1's auth
-    tests), which is why earlier single-request test files got away
-    without it.
+    Two independent Starlette/httpx quirks, neither a production bug:
+
+    1. TestClient only keeps a stable event loop/portal alive for the
+       lifetime of its `with` block. Without this, a test that makes
+       more than one request can fail on the second call with "Event
+       loop is closed" — the app's async DB engine's pooled connections
+       stay bound to the first (by-then-closed) loop. Only surfaces in
+       multi-request tests (first hit in Prompt 1.1's auth tests).
+    2. TestClient's ASGI transport defaults to a plain http:// base URL.
+       httpx's cookie jar correctly (per RFC 6265) refuses to resend a
+       Secure-flagged cookie on a non-HTTPS request — so the Secure
+       refresh-token cookie (Prompt 1.2) would never come back
+       automatically on a later request in the same test. There's no
+       real TLS handshake here (the transport calls the ASGI app
+       in-process), so an https:// base URL costs nothing and makes the
+       jar behave the way it will over a real browser's HTTPS
+       connection (or its "localhost is a secure context" exception).
     """
-    with TestClient(fastapi_app) as c:
+    with TestClient(fastapi_app, base_url="https://testserver") as c:
         yield c
 
 

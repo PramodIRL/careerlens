@@ -1,6 +1,6 @@
 """Tests for email/password authentication: registration, login,
-protected routes, refresh-token rotation/revocation, logout, and
-expired access tokens."""
+protected routes, refresh-token rotation/revocation via an HttpOnly
+cookie, logout, and expired access tokens."""
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -18,6 +18,8 @@ from tests.conftest import isolated_schema_override
 
 _EMAIL = "alice@example.com"
 _PASSWORD = "correct-horse-battery"
+_REFRESH_COOKIE = "refresh_token"
+_REFRESH_COOKIE_PATH = "/api/v1/auth"
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +43,35 @@ def _register(client: TestClient, email: str = _EMAIL, password: str = _PASSWORD
 
 def _login(client: TestClient, email: str = _EMAIL, password: str = _PASSWORD) -> Response:
     return client.post("/api/v1/auth/login", json={"email": email, "password": password})
+
+
+def _refresh(client: TestClient, *, refresh_token: str | None = None) -> Response:
+    """POST /refresh. With refresh_token given, temporarily set exactly
+    that value in the client's own cookie jar (restoring whatever was
+    there afterward) — used to test presenting an old/foreign/absent
+    token without disturbing the rest of the test. Otherwise behaves
+    like a real browser: whatever the jar currently holds is sent
+    automatically. (Per-request `cookies=` on TestClient.post is
+    deprecated by Starlette — this manipulates the jar directly instead,
+    as its own deprecation notice recommends.)"""
+    if refresh_token is None:
+        return client.post("/api/v1/auth/refresh")
+
+    # Operate on the raw jar rather than .get()/.set()/.delete() by name:
+    # the server's real cookie is stored under TestClient's internal
+    # test-domain, so a same-named synthetic entry (even path-matched)
+    # makes those raise httpx.CookieConflict ("multiple cookies exist").
+    # This app only ever sets one cookie, so save-clear-restore the whole
+    # jar is simple and exact.
+    saved_cookies = list(client.cookies.jar)
+    client.cookies.jar.clear()
+    client.cookies.set(_REFRESH_COOKIE, refresh_token, path=_REFRESH_COOKIE_PATH)
+    try:
+        return client.post("/api/v1/auth/refresh")
+    finally:
+        client.cookies.jar.clear()
+        for cookie in saved_cookies:
+            client.cookies.jar.set_cookie(cookie)
 
 
 def test_register_creates_user_without_leaking_password(client: TestClient) -> None:
@@ -71,8 +102,33 @@ def test_login_succeeds_with_correct_credentials(client: TestClient) -> None:
     body = response.json()
     assert body["token_type"] == "bearer"
     assert body["access_token"]
-    assert body["refresh_token"]
     assert body["expires_in"] == get_settings().jwt_access_token_expire_minutes * 60
+
+
+def test_login_response_never_includes_the_raw_refresh_token(client: TestClient) -> None:
+    """The whole point of the HttpOnly cookie: the raw refresh token must
+    never appear anywhere JavaScript on the page could read it."""
+    _register(client)
+
+    response = _login(client)
+
+    assert "refresh_token" not in response.json()
+
+
+def test_login_sets_an_httponly_secure_samesite_cookie_scoped_to_auth(
+    client: TestClient,
+) -> None:
+    _register(client)
+
+    response = _login(client)
+
+    assert response.cookies.get(_REFRESH_COOKIE)
+    set_cookie = response.headers.get("set-cookie", "")
+    assert f"{_REFRESH_COOKIE}=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Path=/api/v1/auth" in set_cookie
 
 
 def test_login_with_bad_password_returns_the_same_error_as_unknown_email(
@@ -105,45 +161,68 @@ def test_protected_route_accepts_a_valid_token(client: TestClient) -> None:
     assert response.json()["email"] == _EMAIL
 
 
-def test_refresh_rotates_the_token_and_rejects_the_old_one(client: TestClient) -> None:
-    _register(client)
-    old_refresh_token = _login(client).json()["refresh_token"]
+def test_refresh_without_a_cookie_is_rejected(client: TestClient) -> None:
+    response = _refresh(client)  # no prior login: jar has no cookie at all
 
-    refreshed = client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh_token})
+    assert response.status_code == 401
+
+
+def test_refresh_rotates_the_cookie_and_rejects_the_old_token(client: TestClient) -> None:
+    _register(client)
+    _login(client)  # cookie now stored in the client's jar, like a browser
+    old_refresh_token = client.cookies.get(_REFRESH_COOKIE)
+    assert old_refresh_token
+
+    refreshed = _refresh(client)  # uses the jar automatically
     assert refreshed.status_code == 200
-    new_refresh_token = refreshed.json()["refresh_token"]
+    assert "refresh_token" not in refreshed.json()  # never in JSON, on refresh either
+
+    new_refresh_token = client.cookies.get(_REFRESH_COOKIE)  # jar auto-updated
+    assert new_refresh_token
     assert new_refresh_token != old_refresh_token
 
-    reuse_attempt = client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh_token})
+    reuse_attempt = _refresh(client, refresh_token=old_refresh_token)
     assert reuse_attempt.status_code == 401
 
 
 def test_reusing_a_revoked_refresh_token_revokes_the_whole_session(client: TestClient) -> None:
     _register(client)
-    old_refresh_token = _login(client).json()["refresh_token"]
-    new_refresh_token = client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": old_refresh_token}
-    ).json()["refresh_token"]
+    _login(client)
+    old_refresh_token = client.cookies.get(_REFRESH_COOKIE)
+    assert old_refresh_token
+
+    _refresh(client)  # rotates; jar now holds the new token
+    new_refresh_token = client.cookies.get(_REFRESH_COOKIE)
+    assert new_refresh_token
 
     # Reusing the now-rotated-away old token is a compromise signal: it
     # should revoke the token that replaced it too, not just itself.
-    client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh_token})
-    still_using_new_token = client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": new_refresh_token}
-    )
+    _refresh(client, refresh_token=old_refresh_token)
+    still_using_new_token = _refresh(client, refresh_token=new_refresh_token)
 
     assert still_using_new_token.status_code == 401
 
 
-def test_logout_revokes_the_refresh_token(client: TestClient) -> None:
+def test_logout_revokes_and_clears_the_refresh_cookie(client: TestClient) -> None:
     _register(client)
-    refresh_token = _login(client).json()["refresh_token"]
+    _login(client)
+    refresh_token = client.cookies.get(_REFRESH_COOKIE)
+    assert refresh_token
 
-    logout = client.post("/api/v1/auth/logout", json={"refresh_token": refresh_token})
+    logout = client.post("/api/v1/auth/logout")  # uses the jar's cookie
     assert logout.status_code == 204
+    set_cookie = logout.headers.get("set-cookie", "")
+    assert f'{_REFRESH_COOKIE}=""' in set_cookie or f"{_REFRESH_COOKIE}=" in set_cookie
+    assert "Max-Age=0" in set_cookie or "expires=" in set_cookie.lower()
 
-    reuse_after_logout = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    reuse_after_logout = _refresh(client, refresh_token=refresh_token)
     assert reuse_after_logout.status_code == 401
+
+
+def test_logout_without_a_session_is_a_no_op(client: TestClient) -> None:
+    response = client.post("/api/v1/auth/logout")
+
+    assert response.status_code == 204
 
 
 def test_expired_access_token_is_rejected(client: TestClient) -> None:

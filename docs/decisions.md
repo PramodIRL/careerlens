@@ -125,4 +125,60 @@ Add one entry per decision, most recent first.
   failures of any cause; specific `409` (`"email already registered"`)
   for registration only.
 
+- **Date**: 2026-08-22
+- **Decision**: For the browser flow, move the refresh token out of the
+  JSON response entirely and into an `HttpOnly`/`Secure`/`SameSite=Lax`
+  cookie scoped to `/api/v1/auth`; the access token stays in-memory only
+  in the frontend (no `localStorage`, no cookie).
+- **Problem**: Prompt 1.1's API returned the raw refresh token in the
+  login/refresh JSON body. Any JavaScript on the page — including an
+  XSS payload — could read that response and steal a long-lived
+  credential. An `HttpOnly` cookie is invisible to JavaScript by design;
+  keeping the token in the JSON response too would have defeated that
+  protection for the one client (the browser) it matters most for.
+- **Alternatives**: Keep returning the refresh token in JSON and let the
+  browser store it (localStorage or an app-managed cookie); accept it
+  from either a cookie or a JSON body on `/refresh`/`/logout` for
+  backward compatibility with non-browser clients.
+- **Trade-off**: A cookie-only design means the API now depends on
+  `allow_credentials=True` CORS and a same-site deployment (or, later,
+  matching cookie `Domain` values across subdomains) to work at all —
+  more coupling between web and API than a bearer-token-everywhere
+  design would have. Accepted deliberately: the security property (raw
+  token never JS-readable) is worth more than that flexibility for this
+  product's browser-first flow. Non-browser clients aren't a real use
+  case yet.
+- **Outcome**: `AccessTokenResponse` (Prompt 1.1's `TokenPairResponse`,
+  minus `refresh_token`); `/refresh` and `/logout` read the cookie only,
+  no JSON-body alternative — verified live (browser `document.cookie`
+  returns `""`, response body confirmed to omit the field) and by
+  `test_login_response_never_includes_the_raw_refresh_token` and
+  `test_login_sets_an_httponly_secure_samesite_cookie_scoped_to_auth`.
+
+- **Date**: 2026-08-22
+- **Decision**: Deduplicate concurrent calls to the frontend's
+  `refresh()` into a single in-flight request (`api-client.ts`).
+- **Problem**: Found live, not in a mocked test: React's Strict Mode
+  double-invokes effects in development, so `AuthProvider`'s mount-time
+  silent-refresh fired twice almost simultaneously. The API rotates the
+  refresh token on every use and revokes the *entire* session if an
+  already-used token is presented again (Prompt 1.1's reuse-detection) —
+  so the second, losing call presented the first call's now-rotated-away
+  cookie, which the server correctly treated as a reuse/compromise
+  signal and revoked the session the first call had just established.
+  Not React-specific in principle: two browser tabs mounting at once
+  could hit the same race.
+- **Alternatives**: Weaken server-side reuse detection with a grace
+  period for near-simultaneous reuse (used by some real-world rotating-
+  refresh-token implementations); guard only the React effect itself
+  (e.g. a mount ref) rather than the API client.
+- **Trade-off**: Fixing it in the API client protects every caller
+  (present and future), not just this one effect, and keeps the
+  server's reuse detection maximally strict — the safer place to relax
+  a security control is nowhere, if the client can simply not create
+  the race in the first place.
+- **Outcome**: `refresh()` caches its in-flight promise; concurrent
+  callers share the one request. Covered by
+  `api-client.test.ts` (`refresh > deduplicates concurrent calls...`).
+
 <!-- Add new entries above this line, most recent first. -->

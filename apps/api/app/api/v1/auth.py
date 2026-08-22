@@ -1,18 +1,24 @@
 """Authentication endpoints: register, login, refresh, logout, me.
 
+Browser flow (Prompt 1.2): the refresh token lives only in an HttpOnly
+cookie, scoped to /api/v1/auth, and is never present in a JSON response
+or accepted from a request body — a script on the page cannot read it,
+and there is no alternate path that would defeat that. Access tokens are
+short-lived and returned in the body for the caller to hold in memory.
+
 Error responses are deliberately generic where specificity would leak
 information an attacker could use: login never reveals whether an email
 exists or the password was wrong, and neither refresh, logout, nor the
 protected-route dependency distinguish "invalid", "expired", or
-"revoked" in their response body. See the Prompt 1.1 report for the
-full rationale.
+"revoked" in their response body. See docs/decisions.md for the full
+rationale on both the token design and the error-response design.
 """
 
 import uuid
 from datetime import UTC, datetime
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,13 +27,7 @@ from app.db import get_db
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.rate_limit import rate_limit_auth
-from app.schemas.auth import (
-    LoginRequest,
-    RefreshRequest,
-    RegisterRequest,
-    TokenPairResponse,
-    UserResponse,
-)
+from app.schemas.auth import AccessTokenResponse, LoginRequest, RegisterRequest, UserResponse
 from app.security import (
     create_access_token,
     generate_refresh_token,
@@ -36,6 +36,7 @@ from app.security import (
     verify_password,
 )
 from app.security import decode_access_token as _decode_access_token
+from app.settings import get_settings
 
 router = APIRouter()
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -46,17 +47,51 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 _GENERIC_LOGIN_ERROR = "invalid email or password"
 _GENERIC_AUTH_ERROR = "could not validate credentials"
 
+# Scoped to /api/v1/auth only: the browser never needs to send this
+# cookie to /api/v1/health, /api/v1/auth/me, or any future endpoint —
+# only the three routes that actually read it.
+_REFRESH_COOKIE_NAME = "refresh_token"
+_REFRESH_COOKIE_PATH = "/api/v1/auth"
 
-async def _issue_token_pair(db: AsyncSession, user_id: uuid.UUID) -> TokenPairResponse:
+
+def _set_refresh_cookie(response: Response, raw_token: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        value=raw_token,
+        max_age=settings.jwt_refresh_token_expire_days * 24 * 60 * 60,
+        httponly=True,
+        # Works over plain HTTP on "localhost" specifically — modern
+        # browsers treat it as a secure context — and is unconditionally
+        # correct once real deployments use HTTPS. See docs/decisions.md.
+        secure=True,
+        samesite="lax",
+        path=_REFRESH_COOKIE_PATH,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    # Attributes must match _set_refresh_cookie's for the browser to
+    # recognize this as clearing the same cookie rather than a no-op.
+    response.delete_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path=_REFRESH_COOKIE_PATH,
+    )
+
+
+async def _issue_tokens(
+    db: AsyncSession, response: Response, user_id: uuid.UUID
+) -> AccessTokenResponse:
     access_token, expires_in = create_access_token(user_id)
     raw_refresh_token, token_hash, expires_at = generate_refresh_token()
     db.add(RefreshToken(user_id=user_id, token_hash=token_hash, expires_at=expires_at))
     await db.commit()
-    return TokenPairResponse(
-        access_token=access_token,
-        refresh_token=raw_refresh_token,
-        token_type="bearer",
-        expires_in=expires_in,
+    _set_refresh_cookie(response, raw_refresh_token)
+    return AccessTokenResponse(
+        access_token=access_token, token_type="bearer", expires_in=expires_in
     )
 
 
@@ -85,30 +120,40 @@ async def register(
     return user
 
 
-@router.post("/login", response_model=TokenPairResponse)
+@router.post("/login", response_model=AccessTokenResponse)
 async def login(
     body: LoginRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     _rate_limit: None = Depends(rate_limit_auth),
-) -> TokenPairResponse:
+) -> AccessTokenResponse:
     email = body.email.lower()
     user = await db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_LOGIN_ERROR)
 
-    return await _issue_token_pair(db, user.id)
+    return await _issue_tokens(db, response, user.id)
 
 
-@router.post("/refresh", response_model=TokenPairResponse)
+@router.post("/refresh", response_model=AccessTokenResponse)
 async def refresh(
-    body: RefreshRequest,
+    request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     _rate_limit: None = Depends(rate_limit_auth),
-) -> TokenPairResponse:
-    token_hash = hash_refresh_token(body.refresh_token)
+) -> AccessTokenResponse:
+    """Reads the refresh token from the HttpOnly cookie only — there is
+    no request-body alternative, so there is only one path a raw token
+    ever travels on, and it's never one JavaScript can read or write."""
+    raw_token = request.cookies.get(_REFRESH_COOKIE_NAME)
+    if raw_token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
+
+    token_hash = hash_refresh_token(raw_token)
     record = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
 
     if record is None:
+        _clear_refresh_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
 
     if record.revoked_at is not None:
@@ -121,24 +166,34 @@ async def refresh(
             .values(revoked_at=datetime.now(UTC))
         )
         await db.commit()
+        _clear_refresh_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
 
     if record.expires_at < datetime.now(UTC):
+        _clear_refresh_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
 
     record.revoked_at = datetime.now(UTC)
-    return await _issue_token_pair(db, record.user_id)
+    # Rotation: reissuing sets a fresh cookie (new raw token, new row);
+    # the old row stays in the table, now revoked, purely as the record
+    # that makes reuse-detection above possible.
+    return await _issue_tokens(db, response, record.user_id)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> None:
-    token_hash = hash_refresh_token(body.refresh_token)
-    await db.execute(
-        update(RefreshToken)
-        .where(RefreshToken.token_hash == token_hash, RefreshToken.revoked_at.is_(None))
-        .values(revoked_at=datetime.now(UTC))
-    )
-    await db.commit()
+async def logout(request: Request, response: Response, db: AsyncSession = Depends(get_db)) -> None:
+    """Idempotent: calling logout with no session (already logged out, or
+    never logged in) is not an error — it just clears the cookie."""
+    raw_token = request.cookies.get(_REFRESH_COOKIE_NAME)
+    if raw_token is not None:
+        token_hash = hash_refresh_token(raw_token)
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+        await db.commit()
+    _clear_refresh_cookie(response)
 
 
 async def get_current_user(
