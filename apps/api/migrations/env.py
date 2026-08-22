@@ -6,6 +6,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+import app.models  # noqa: F401  (registers ORM models onto Base.metadata for autogenerate)
 from app.db import Base
 from app.settings import get_settings
 

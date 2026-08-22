@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
 
+    # Signs access JWTs. This default is an obvious local-dev-only
+    # placeholder (matches the postgres_password convention above),
+    # length chosen to meet HS256's 32-byte recommended minimum (RFC
+    # 7518 §3.2) so local dev doesn't trip PyJWT's key-length warning —
+    # every real deployment must set its own via the environment.
+    jwt_secret: str = "insecure-dev-secret-change-me-before-deploying"
+    jwt_access_token_expire_minutes: int = 15
+    jwt_refresh_token_expire_days: int = 30
+
+    auth_rate_limit_max_requests: int = 10
+    auth_rate_limit_window_seconds: int = 60
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""

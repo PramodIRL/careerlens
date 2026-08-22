@@ -101,10 +101,31 @@ anyway. That final visual confirmation is a separate, manual step:
 Unlike the smoke test, these stay running until you stop them yourself
 (`make stop`, then `Ctrl-C` the other two).
 
+## Authentication
+
+Email/password auth, under `/api/v1/auth`:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /register` | Create an account. Duplicate email → `409`. |
+| `POST /login` | Returns an access token (JWT, 15 min) + refresh token (opaque, 30 days). Wrong email *or* wrong password → identical generic `401` — no signal about which was wrong. |
+| `POST /refresh` | Exchanges a refresh token for a new pair, revoking the old one (rotation). Reusing an already-used refresh token revokes the *entire* session as a compromise signal. |
+| `POST /logout` | Revokes a refresh token immediately. |
+| `GET /me` | Protected route — requires `Authorization: Bearer <access_token>`. |
+
+Register/login/refresh share an in-memory rate limit (10 requests/60s per
+client IP by default) — see `app/rate_limit.py` for why this is
+single-process only, not yet suitable for a multi-instance deployment.
+
+Passwords are hashed with bcrypt; refresh tokens are stored only as a
+SHA-256 hash of the random value handed to the client — see
+`app/security.py` for why neither is ever stored as-is.
+
 ## Migrations
 
 Schema changes are tracked with [Alembic](https://alembic.sqlalchemy.org/).
-The only migration so far enables the `pgvector` Postgres extension — no
+Two migrations exist so far: enabling the `pgvector` Postgres extension,
+and creating the `users` / `refresh_tokens` tables (Prompt 1.1) — no other
 product tables exist yet.
 
 ```bash
