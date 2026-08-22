@@ -1,25 +1,67 @@
 """Tests for email/password authentication: registration, login,
 protected routes, refresh-token rotation/revocation via an HttpOnly
-cookie, logout, and expired access tokens."""
+cookie, logout, expired access tokens, and the Prompt 1.2 bug-fix
+(structural + short-recency tolerance for a benign concurrent-refresh
+race, without weakening genuine reuse/compromise detection)."""
 
+import asyncio
+import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx import ASGITransport, AsyncClient, Response
+from sqlalchemy import select
 
-from app.db import get_db
+from app.db import build_session_factory, get_db
 from app.main import app
+from app.models.refresh_token import RefreshToken
 from app.rate_limit import _request_log
+from app.security import hash_refresh_token
 from app.settings import get_settings
-from tests.conftest import isolated_schema_override
+from tests.conftest import TEST_SCHEMA, isolated_schema_override
 
 _EMAIL = "alice@example.com"
 _PASSWORD = "correct-horse-battery"
 _REFRESH_COOKIE = "refresh_token"
 _REFRESH_COOKIE_PATH = "/api/v1/auth"
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    # Pin to asyncio: without this, anyio's pytest plugin would also try
+    # to run the async tests below under trio, which this project
+    # doesn't use or depend on.
+    return "asyncio"
+
+
+async def _fetch_refresh_token(raw_token: str) -> RefreshToken | None:
+    """Direct DB lookup by raw token, for assertions the HTTP responses
+    alone can't make (e.g. replaced_by_id linkage)."""
+    factory = build_session_factory(
+        get_settings().database_url,
+        connect_args={"server_settings": {"search_path": TEST_SCHEMA}},
+    )
+    async with factory() as session:
+        return await session.scalar(
+            select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(raw_token))
+        )
+
+
+async def _count_active_refresh_tokens(user_id: uuid.UUID) -> int:
+    factory = build_session_factory(
+        get_settings().database_url,
+        connect_args={"server_settings": {"search_path": TEST_SCHEMA}},
+    )
+    async with factory() as session:
+        rows = await session.scalars(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)
+            )
+        )
+        return len(rows.all())
 
 
 @pytest.fixture(autouse=True)
@@ -185,7 +227,15 @@ def test_refresh_rotates_the_cookie_and_rejects_the_old_token(client: TestClient
     assert reuse_attempt.status_code == 401
 
 
-def test_reusing_a_revoked_refresh_token_revokes_the_whole_session(client: TestClient) -> None:
+def test_reusing_the_immediate_predecessor_soon_after_rotation_does_not_revoke_the_session(
+    client: TestClient,
+) -> None:
+    """Prompt 1.2 bug fix: two rapid page reloads, or two tabs, both
+    still holding the pre-rotation cookie. The loser's request must
+    fail on its own, but must NOT cascade-revoke the session the
+    winner's request just established. Sequential/deterministic
+    complement to the true-concurrency test below — both exercise the
+    same tolerance, from different angles."""
     _register(client)
     _login(client)
     old_refresh_token = client.cookies.get(_REFRESH_COOKIE)
@@ -195,12 +245,148 @@ def test_reusing_a_revoked_refresh_token_revokes_the_whole_session(client: TestC
     new_refresh_token = client.cookies.get(_REFRESH_COOKIE)
     assert new_refresh_token
 
-    # Reusing the now-rotated-away old token is a compromise signal: it
-    # should revoke the token that replaced it too, not just itself.
-    _refresh(client, refresh_token=old_refresh_token)
-    still_using_new_token = _refresh(client, refresh_token=new_refresh_token)
+    # Reusing the token that was *just* replaced, *immediately* after —
+    # exactly what a losing reload/tab presents.
+    reuse_attempt = _refresh(client, refresh_token=old_refresh_token)
+    assert reuse_attempt.status_code == 401
 
-    assert still_using_new_token.status_code == 401
+    # The session must survive: the winner's token still works.
+    still_using_new_token = _refresh(client, refresh_token=new_refresh_token)
+    assert still_using_new_token.status_code == 200
+
+
+def test_older_token_several_generations_back_still_revokes_the_session(
+    client: TestClient,
+) -> None:
+    """A token that is *not* the immediate predecessor of the current
+    active token must still trigger full compromise handling, even
+    though the reuse happens quickly (well within the recency window) —
+    adjacency, not just recency, gates the tolerance."""
+    _register(client)
+    _login(client)
+    token_1 = client.cookies.get(_REFRESH_COOKIE)
+    assert token_1
+
+    _refresh(client)  # 1 -> 2
+    _refresh(client)  # 2 -> 3
+    token_3 = client.cookies.get(_REFRESH_COOKIE)
+    assert token_3 and token_3 != token_1
+
+    # token_1 is now two generations behind the current head (token_3) —
+    # not its immediate predecessor.
+    reuse_old = _refresh(client, refresh_token=token_1)
+    assert reuse_old.status_code == 401
+
+    # The cascade must have revoked token_3 too.
+    still_using_current = _refresh(client, refresh_token=token_3)
+    assert still_using_current.status_code == 401
+
+
+def test_immediate_predecessor_reused_after_grace_window_still_revokes_the_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even the exact immediate predecessor must stop being tolerated
+    once it's reused outside the (configurable) recency window."""
+    monkeypatch.setattr(get_settings(), "auth_refresh_reuse_grace_seconds", 0)
+
+    _register(client)
+    _login(client)
+    old_refresh_token = client.cookies.get(_REFRESH_COOKIE)
+    assert old_refresh_token
+
+    _refresh(client)  # rotates; with a 0-second window, any elapsed time is "outside" it
+    new_refresh_token = client.cookies.get(_REFRESH_COOKIE)
+    assert new_refresh_token
+
+    reuse_old = _refresh(client, refresh_token=old_refresh_token)
+    assert reuse_old.status_code == 401
+
+    # Cascade should have happened this time.
+    still_using_new = _refresh(client, refresh_token=new_refresh_token)
+    assert still_using_new.status_code == 401
+
+
+def _client_with_refresh_cookie(token: str) -> AsyncClient:
+    """A standalone async client pre-loaded with the given refresh-token
+    cookie in its own jar — models one browser tab/page-load's isolated
+    cookie state, rather than sharing one client's jar across "requests"
+    that are supposed to be independent contexts (and avoids relying on
+    httpx's deprecated per-request `cookies=` override)."""
+    ac = AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver")
+    ac.cookies.set(_REFRESH_COOKIE, token, path=_REFRESH_COOKIE_PATH)
+    return ac
+
+
+async def _register_and_login_for_race() -> str:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver") as ac:
+        await ac.post("/api/v1/auth/register", json={"email": _EMAIL, "password": _PASSWORD})
+        login = await ac.post("/api/v1/auth/login", json={"email": _EMAIL, "password": _PASSWORD})
+    old_token = login.cookies.get(_REFRESH_COOKIE)
+    assert old_token
+    return old_token
+
+
+@pytest.mark.anyio
+async def test_concurrent_refresh_with_same_token_one_wins_one_loses_and_session_survives() -> None:
+    """Direct reproduction of the original bug report: two truly
+    concurrent /refresh calls presenting the same starting cookie —
+    exactly what happens when two rapid page reloads, or two tabs, both
+    still hold the pre-rotation cookie at request time."""
+    old_token = await _register_and_login_for_race()
+
+    async with (
+        _client_with_refresh_cookie(old_token) as client_a,
+        _client_with_refresh_cookie(old_token) as client_b,
+    ):
+        result_a, result_b = await asyncio.gather(
+            client_a.post("/api/v1/auth/refresh"),
+            client_b.post("/api/v1/auth/refresh"),
+        )
+
+    statuses = sorted([result_a.status_code, result_b.status_code])
+    assert statuses == [200, 401]
+
+    winner = result_a if result_a.status_code == 200 else result_b
+    new_token = winner.cookies.get(_REFRESH_COOKIE)
+    assert new_token and new_token != old_token
+
+    # The whole point of the fix: the winner's brand-new session must
+    # still work — the loser's failure must not have cascaded.
+    async with _client_with_refresh_cookie(new_token) as follow_up:
+        followup = await follow_up.post("/api/v1/auth/refresh")
+    assert followup.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_concurrent_rotation_is_serialized_and_leaves_exactly_one_active_token() -> None:
+    """DB-level proof that the row lock actually serializes concurrent
+    rotation attempts: exactly one new token is created, the old one's
+    replaced_by_id points at it precisely, and exactly one active token
+    remains for the user afterward."""
+    old_token = await _register_and_login_for_race()
+
+    async with (
+        _client_with_refresh_cookie(old_token) as client_a,
+        _client_with_refresh_cookie(old_token) as client_b,
+    ):
+        result_a, result_b = await asyncio.gather(
+            client_a.post("/api/v1/auth/refresh"),
+            client_b.post("/api/v1/auth/refresh"),
+        )
+
+    winner = result_a if result_a.status_code == 200 else result_b
+    new_token = winner.cookies.get(_REFRESH_COOKIE)
+    assert new_token
+
+    old_record = await _fetch_refresh_token(old_token)
+    new_record = await _fetch_refresh_token(new_token)
+    assert old_record is not None
+    assert new_record is not None
+    assert old_record.revoked_at is not None
+    assert old_record.replaced_by_id == new_record.id
+    assert new_record.revoked_at is None
+
+    assert await _count_active_refresh_tokens(new_record.user_id) == 1
 
 
 def test_logout_revokes_and_clears_the_refresh_cookie(client: TestClient) -> None:

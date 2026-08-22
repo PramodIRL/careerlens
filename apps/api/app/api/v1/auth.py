@@ -15,7 +15,7 @@ rationale on both the token design and the error-response design.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -84,15 +84,51 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 async def _issue_tokens(
     db: AsyncSession, response: Response, user_id: uuid.UUID
-) -> AccessTokenResponse:
+) -> tuple[AccessTokenResponse, RefreshToken]:
+    """Stage a new access/refresh token pair and set the refresh cookie.
+
+    Flushes (so the new row has an id) but does not commit — callers
+    that need to link a rotated-away token's replaced_by_id to this new
+    row do so before committing, so both changes land in one atomic
+    transaction. Returns the new RefreshToken row alongside the response
+    body so rotation can read its id.
+    """
     access_token, expires_in = create_access_token(user_id)
     raw_refresh_token, token_hash, expires_at = generate_refresh_token()
-    db.add(RefreshToken(user_id=user_id, token_hash=token_hash, expires_at=expires_at))
-    await db.commit()
+    new_record = RefreshToken(user_id=user_id, token_hash=token_hash, expires_at=expires_at)
+    db.add(new_record)
+    await db.flush()
     _set_refresh_cookie(response, raw_refresh_token)
-    return AccessTokenResponse(
+    token_response = AccessTokenResponse(
         access_token=access_token, token_type="bearer", expires_in=expires_in
     )
+    return token_response, new_record
+
+
+async def _is_benign_concurrent_refresh_race(db: AsyncSession, record: RefreshToken) -> bool:
+    """True if `record` (already known to be revoked) is exactly the
+    immediate, still-active predecessor of the token that replaced it,
+    and was revoked recently enough to plausibly be a losing side of a
+    concurrent-refresh race rather than genuine token reuse.
+
+    Both conditions matter: without the recency check, a session left
+    idle for a long time would keep tolerating reuse of its one-hop-back
+    predecessor indefinitely (a real, if narrow, weakening — see
+    docs/decisions.md); without the adjacency check, a token several
+    rotations old could slip through if all those rotations happened to
+    occur within the recency window (e.g. a rapid reload loop).
+    """
+    if record.replaced_by_id is None:
+        return False  # revoked with no known successor (logout, or a prior cascade) — never benign
+
+    assert record.revoked_at is not None  # caller already checked this
+    settings = get_settings()
+    age = datetime.now(UTC) - record.revoked_at
+    if age > timedelta(seconds=settings.auth_refresh_reuse_grace_seconds):
+        return False
+
+    successor = await db.get(RefreshToken, record.replaced_by_id)
+    return successor is not None and successor.revoked_at is None
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
@@ -132,7 +168,9 @@ async def login(
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_LOGIN_ERROR)
 
-    return await _issue_tokens(db, response, user.id)
+    token_response, _new_record = await _issue_tokens(db, response, user.id)
+    await db.commit()
+    return token_response
 
 
 @router.post("/refresh", response_model=AccessTokenResponse)
@@ -150,16 +188,38 @@ async def refresh(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
 
     token_hash = hash_refresh_token(raw_token)
-    record = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+    # FOR UPDATE: serializes concurrent requests presenting the same
+    # token. Without this, two racing requests could both read
+    # revoked_at IS NULL and both attempt to rotate — the loser here
+    # instead blocks until the winner commits, then sees the fully
+    # up-to-date row (revoked_at and replaced_by_id both set), which is
+    # exactly the information the benign-race check below needs.
+    record = await db.scalar(
+        select(RefreshToken).where(RefreshToken.token_hash == token_hash).with_for_update()
+    )
 
     if record is None:
         _clear_refresh_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
 
     if record.revoked_at is not None:
-        # Reuse of an already-rotated/revoked token is a compromise
-        # signal (a legitimate client would never do this) — revoke
-        # every active session for this user, not just this one token.
+        if await _is_benign_concurrent_refresh_race(db, record):
+            # A losing side of a concurrent-refresh race (two rapid page
+            # reloads, or two tabs, both starting from this token). Fail
+            # only this request — do NOT cascade-revoke, and do NOT
+            # touch the cookie: a concurrent winning request may have
+            # already set a new one in this same browser, and clearing
+            # it here would destroy that valid session instead of just
+            # failing this one losing request. Never hand back the
+            # replacement token pair either — this stays a plain 401.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR
+            )
+
+        # Otherwise: reuse of a token that is not the current chain's
+        # immediate predecessor, or reused outside the recency window —
+        # a compromise signal. Revoke every active session for this
+        # user, not just this one token.
         await db.execute(
             update(RefreshToken)
             .where(RefreshToken.user_id == record.user_id, RefreshToken.revoked_at.is_(None))
@@ -174,10 +234,14 @@ async def refresh(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_GENERIC_AUTH_ERROR)
 
     record.revoked_at = datetime.now(UTC)
-    # Rotation: reissuing sets a fresh cookie (new raw token, new row);
-    # the old row stays in the table, now revoked, purely as the record
-    # that makes reuse-detection above possible.
-    return await _issue_tokens(db, response, record.user_id)
+    # Rotation: reissuing sets a fresh cookie (new raw token, new row),
+    # then links the old row to it via replaced_by_id — the exact
+    # adjacency the benign-race check above depends on. One commit for
+    # both changes, keeping them atomic.
+    token_response, new_record = await _issue_tokens(db, response, record.user_id)
+    record.replaced_by_id = new_record.id
+    await db.commit()
+    return token_response
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
