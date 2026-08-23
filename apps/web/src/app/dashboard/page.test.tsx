@@ -9,6 +9,7 @@ vi.mock("next/navigation", () => ({
 const refreshMock = vi.fn();
 const getCurrentUserMock = vi.fn();
 const logoutMock = vi.fn();
+const getProfileMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -20,6 +21,10 @@ vi.mock("@/lib/api-client", async () => {
     refresh: (...args: unknown[]) => refreshMock(...args),
     getCurrentUser: (...args: unknown[]) => getCurrentUserMock(...args),
     logout: (...args: unknown[]) => logoutMock(...args),
+    // The dashboard renders <ProfileForm>, which fetches the profile on
+    // mount — must be mocked too, or it hits a real (nonexistent, in
+    // this test) API. Its own behavior is covered by profile-form.test.tsx.
+    getProfile: (...args: unknown[]) => getProfileMock(...args),
   };
 });
 
@@ -45,6 +50,18 @@ beforeEach(() => {
   refreshMock.mockReset();
   getCurrentUserMock.mockReset();
   logoutMock.mockReset();
+  getProfileMock.mockReset().mockResolvedValue({
+    user_id: MOCK_USER.id,
+    full_name: null,
+    headline: null,
+    city: null,
+    country: null,
+    experience_level: null,
+    target_roles: [],
+    target_skills: [],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  });
 });
 
 describe("dashboard protected navigation", () => {
