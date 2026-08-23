@@ -1,0 +1,146 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const listResumesMock = vi.fn();
+const uploadResumeMock = vi.fn();
+const deleteResumeMock = vi.fn();
+
+vi.mock("@/lib/api-client", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/api-client")>(
+      "@/lib/api-client",
+    );
+  return {
+    ...actual,
+    listResumes: (...args: unknown[]) => listResumesMock(...args),
+    uploadResume: (...args: unknown[]) => uploadResumeMock(...args),
+    deleteResume: (...args: unknown[]) => deleteResumeMock(...args),
+  };
+});
+
+import ResumeSection from "./resume-section";
+
+const ACCESS_TOKEN = "tok";
+
+const RESUME_A = {
+  id: "aaaaaaaa-1111-1111-1111-111111111111",
+  user_id: "user-1",
+  original_filename: "Resume.pdf",
+  content_type: "application/pdf",
+  file_size_bytes: 154_000,
+  status: "uploaded" as const,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
+function renderSection() {
+  return render(<ResumeSection accessToken={ACCESS_TOKEN} />);
+}
+
+function pdfFile(name = "resume.pdf") {
+  return new File(["%PDF-1.4 fake"], name, { type: "application/pdf" });
+}
+
+beforeEach(() => {
+  listResumesMock.mockReset();
+  uploadResumeMock.mockReset();
+  deleteResumeMock.mockReset();
+});
+
+describe("resume section", () => {
+  it("loads and displays the resume list", async () => {
+    listResumesMock.mockResolvedValue([RESUME_A]);
+
+    renderSection();
+
+    expect(await screen.findByText("Resume.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/150\.4 KB/)).toBeInTheDocument();
+    expect(screen.getByText(/uploaded/)).toBeInTheDocument();
+    expect(listResumesMock).toHaveBeenCalledWith(ACCESS_TOKEN);
+  });
+
+  it("shows an empty state with no resumes", async () => {
+    listResumesMock.mockResolvedValue([]);
+
+    renderSection();
+
+    expect(
+      await screen.findByText(/no resumes uploaded yet/i),
+    ).toBeInTheDocument();
+  });
+
+  it("uploads a selected file and adds it to the list", async () => {
+    listResumesMock.mockResolvedValue([]);
+    uploadResumeMock.mockResolvedValue(RESUME_A);
+
+    renderSection();
+    await screen.findByText(/no resumes uploaded yet/i);
+
+    fireEvent.change(screen.getByLabelText(/upload resume/i), {
+      target: { files: [pdfFile()] },
+    });
+
+    await waitFor(() => expect(uploadResumeMock).toHaveBeenCalled());
+    const [token, file] = uploadResumeMock.mock.calls[0];
+    expect(token).toBe(ACCESS_TOKEN);
+    expect(file.name).toBe("resume.pdf");
+    expect(await screen.findByText("Resume.pdf")).toBeInTheDocument();
+  });
+
+  it("shows the API's error message when an upload is rejected", async () => {
+    const { ApiError } = await import("@/lib/api-client");
+    listResumesMock.mockResolvedValue([]);
+    uploadResumeMock.mockRejectedValue(
+      new ApiError(422, "only .pdf and .docx files are supported"),
+    );
+
+    renderSection();
+    await screen.findByText(/no resumes uploaded yet/i);
+
+    fireEvent.change(screen.getByLabelText(/upload resume/i), {
+      target: { files: [pdfFile("resume.exe")] },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "only .pdf and .docx files are supported",
+    );
+  });
+
+  it("deletes a resume and removes it from the list", async () => {
+    listResumesMock.mockResolvedValue([RESUME_A]);
+    deleteResumeMock.mockResolvedValue(undefined);
+
+    renderSection();
+    await screen.findByText("Resume.pdf");
+
+    fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+
+    await waitFor(() =>
+      expect(deleteResumeMock).toHaveBeenCalledWith(ACCESS_TOKEN, RESUME_A.id),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Resume.pdf")).not.toBeInTheDocument(),
+    );
+    expect(
+      await screen.findByText(/no resumes uploaded yet/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the API's error message when a delete fails, without removing the row", async () => {
+    const { ApiError } = await import("@/lib/api-client");
+    listResumesMock.mockResolvedValue([RESUME_A]);
+    deleteResumeMock.mockRejectedValue(
+      new ApiError(403, "not authorized to access this resume"),
+    );
+
+    renderSection();
+    await screen.findByText("Resume.pdf");
+
+    fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "not authorized to access this resume",
+    );
+    expect(screen.getByText("Resume.pdf")).toBeInTheDocument();
+  });
+});

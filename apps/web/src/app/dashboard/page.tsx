@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
 import ProfileForm from "./profile-form";
+import ResumeSection from "./resume-section";
 
 export default function DashboardPage() {
   const { status, user, accessToken, logout } = useAuth();
@@ -66,6 +67,13 @@ export default function DashboardPage() {
           Your profile
         </h2>
         <ProfileForm accessToken={accessToken} userId={user.id} />
+      </div>
+
+      <div className="w-full max-w-sm">
+        <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+          Your resumes
+        </h2>
+        <ResumeSection accessToken={accessToken} />
       </div>
     </main>
   );

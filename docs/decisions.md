@@ -301,4 +301,60 @@ Add one entry per decision, most recent first.
   plus non-regression/negative coverage for the existing auth `POST`
   preflight and an unconfigured origin).
 
+- **Date**: 2026-08-23
+- **Decision**: For resume upload (Prompt 2.1): a `resumes` table with
+  its own `id` (unlike `profiles`, addressed by the owner's `user_id`,
+  a resume is 1-of-many so it needs its own identity); a small
+  `ResumeStorage` interface (`save`/`read`/`delete`, `app/storage/`)
+  with a `LocalResumeStorage` implementation writing under a configured
+  directory, keyed by an opaque, server-generated `storage_key`
+  (`{user_id}/{resume_id}.{ext}`) that is never returned in any API
+  response; and reject-before-persist validation — extension,
+  declared-Content-Type-matches-extension, real file-signature ("magic
+  bytes") check, size, and filename safety all run before anything is
+  written to the database or disk, so a rejected upload leaves no row
+  and no file behind.
+- **Problem**: A file upload endpoint needs to (a) never trust a
+  client's filename or Content-Type as ground truth for what a file
+  actually is, (b) never leak where a file physically lives, since a
+  path is both an internal implementation detail and, for local
+  storage, a potential traversal/access surface, and (c) not hard-wire
+  "local disk" into the resume domain code, since project-brief calls
+  for S3-compatible storage in production.
+- **Alternatives**: (1) Trust the browser's declared `Content-Type` and
+  the filename extension alone — rejected: both are client-supplied and
+  trivially spoofable (renaming `evil.exe` to `resume.pdf` satisfies
+  both checks; only reading the file's actual first bytes catches it).
+  (2) Store the file at a path derived from the original filename —
+  rejected: makes path-traversal a live concern (`../../etc/passwd`)
+  and collisions likely (two users, or two uploads, both naming a file
+  `resume.pdf`). (3) Call `open()`/`Path.write_bytes()` directly from
+  the route instead of a storage interface — simpler today, but bakes
+  "local filesystem" into the route/domain code that Prompt 7.x's S3
+  migration would then have to rewrite instead of swap.
+- **Trade-off**: The storage interface is a small amount of extra
+  indirection (a Protocol, one implementation, one dependency-injected
+  factory) for code that only has one backend today — justified because
+  the project brief explicitly commits to a second (S3-compatible)
+  backend later, and FastAPI's `Depends()` makes the indirection nearly
+  free (tests override it exactly like `get_db`, pointing at a temp
+  directory instead of a real one). Reject-before-persist is simpler
+  than a "store with a failed status" model, at the cost of not
+  keeping any record that a rejected upload was ever attempted — judged
+  fine, since an invalid upload was never really "the user's resume" to
+  begin with.
+- **Outcome**: `resumes` table (migration `5c4a2b275fdb`),
+  `app/storage/{base,local}.py`, `POST`/`GET`/`GET
+  {id}`/`DELETE {id}` under `/api/v1/resumes`, all requiring
+  `get_current_user` and (for the two id-addressed routes) an explicit
+  `resume.user_id == current_user.id` check — 404 if the id doesn't
+  exist, 403 if it exists but isn't the caller's. `allow_methods` in
+  `app/main.py` gained `"DELETE"` up front this time, applying the
+  lesson from the Prompt 1.3 CORS bug before it could repeat. Covered
+  by `tests/test_resume.py` (including
+  `test_cannot_get_another_users_resume` and
+  `test_cannot_delete_another_users_resume`) and
+  `tests/test_local_storage.py`; verified live via a real browser
+  upload → list → delete cycle with fictional sample PDF/DOCX files.
+
 <!-- Add new entries above this line, most recent first. -->

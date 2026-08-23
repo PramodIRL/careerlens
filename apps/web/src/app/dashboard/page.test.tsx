@@ -10,6 +10,7 @@ const refreshMock = vi.fn();
 const getCurrentUserMock = vi.fn();
 const logoutMock = vi.fn();
 const getProfileMock = vi.fn();
+const listResumesMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -21,10 +22,13 @@ vi.mock("@/lib/api-client", async () => {
     refresh: (...args: unknown[]) => refreshMock(...args),
     getCurrentUser: (...args: unknown[]) => getCurrentUserMock(...args),
     logout: (...args: unknown[]) => logoutMock(...args),
-    // The dashboard renders <ProfileForm>, which fetches the profile on
-    // mount — must be mocked too, or it hits a real (nonexistent, in
-    // this test) API. Its own behavior is covered by profile-form.test.tsx.
+    // The dashboard renders <ProfileForm> and <ResumeSection>, which
+    // each fetch their own data on mount — both must be mocked too, or
+    // they hit a real (nonexistent, in this test) API. Their own
+    // behavior is covered by profile-form.test.tsx and
+    // resume-section.test.tsx.
     getProfile: (...args: unknown[]) => getProfileMock(...args),
+    listResumes: (...args: unknown[]) => listResumesMock(...args),
   };
 });
 
@@ -62,6 +66,7 @@ beforeEach(() => {
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   });
+  listResumesMock.mockReset().mockResolvedValue([]);
 });
 
 describe("dashboard protected navigation", () => {

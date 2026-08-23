@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
 from app.api.v1.profile import router as profile_router
+from app.api.v1.resume import router as resume_router
 
 
 def _allowed_origins() -> list[str]:
@@ -23,10 +24,12 @@ app.add_middleware(
     # refresh/logout) — health was GET-only before this. PATCH added in
     # Prompt 1.3 for the profile update endpoint — without it, the
     # browser's CORS preflight (OPTIONS with
-    # Access-Control-Request-Method: PATCH) is rejected by this
-    # middleware with a 400 before the real PATCH request is ever sent,
-    # regardless of what the route itself allows.
-    allow_methods=["GET", "POST", "PATCH"],
+    # Access-Control-Request-Method: <method>) is rejected by this
+    # middleware with a 400 before the real request is ever sent,
+    # regardless of what the route itself allows (see docs/decisions.md).
+    # DELETE added in Prompt 2.1 for the resume delete endpoint, learning
+    # that lesson ahead of time instead of rediscovering it live again.
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
     # Prompt 1.2: the browser auth flow relies on an HttpOnly refresh-
     # token cookie, which the browser only attaches to (and accepts
@@ -39,3 +42,4 @@ app.add_middleware(
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1/auth")
 app.include_router(profile_router, prefix="/api/v1/profiles")
+app.include_router(resume_router, prefix="/api/v1/resumes")
