@@ -20,8 +20,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
     # POST added in Prompt 1.1 for the auth endpoints (register/login/
-    # refresh/logout) — health was GET-only before this.
-    allow_methods=["GET", "POST"],
+    # refresh/logout) — health was GET-only before this. PATCH added in
+    # Prompt 1.3 for the profile update endpoint — without it, the
+    # browser's CORS preflight (OPTIONS with
+    # Access-Control-Request-Method: PATCH) is rejected by this
+    # middleware with a 400 before the real PATCH request is ever sent,
+    # regardless of what the route itself allows.
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["*"],
     # Prompt 1.2: the browser auth flow relies on an HttpOnly refresh-
     # token cookie, which the browser only attaches to (and accepts
