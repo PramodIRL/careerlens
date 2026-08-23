@@ -562,4 +562,83 @@ Add one entry per decision, most recent first.
   mixed-set filtering, and malformed/transient-retry/retries-exhausted
   behavior all still intact through this path).
 
+- **Date**: 2026-08-23
+- **Decision**: For the skill taxonomy and evidence schema (Prompt 2.3):
+  EXTEND the existing `skills` table (Prompt 1.3, migration
+  `8156d76f48cc`) with a nullable `category` plus new `skill_aliases`
+  and `skill_relations` tables — rather than adding a second "canonical
+  skills" table — and add `candidate_skills` (one row per
+  candidate/skill, `UNIQUE(user_id, skill_id)`) and `skill_evidence`
+  (hanging off `candidate_skills`). Aliases are a normalized table with
+  a **globally** unique `alias_slug`; relations are an untyped,
+  self-referential M:N with both directions materialized. The taxonomy
+  is seeded by a repeatable command (`make seed-skills`) from a typed
+  Python file, never by the migration.
+- **Problem**: Needed somewhere to record which candidate has which
+  skill and, per docs/project-brief.md's Evidence-First rule, why we
+  believe it — with enough structure for Prompt 2.4's deterministic
+  extraction to write into, without pre-building scoring or matching.
+- **Alternatives**: (1) A new `canonical_skills` table alongside
+  `skills` — rejected outright: `skills` is already the canonical
+  vocabulary and is already referenced by `profile_target_skills`, so a
+  second table would fork skill identity and break this file's own
+  Prompt 1.3 commitment that "Python" and "python" resolve to one row
+  across the whole system. Extending also means a skill a user already
+  coined gets *adopted* by the seed rather than duplicated. (2) Aliases
+  as a JSON/array column on `skills` — rejected: the entire purpose of
+  an alias is indexed reverse lookup ("js" -> JavaScript), and JSON
+  cannot enforce the guarantee that actually matters, that one alias
+  resolves to exactly one skill. (3) A `relation_type` column on
+  relations (prerequisite/parent/substitute) — deliberately omitted;
+  see the trade-off below. (4) Denormalizing `user_id` onto
+  `skill_evidence` — rejected: a copy can drift from its parent, and
+  the join back through `candidate_skills` is cheap.
+- **Trade-off**: **Relations are untyped and mean only "these commonly
+  appear together".** They must never be read as prerequisite,
+  parent/child, substitute, dependency, or hierarchy — Python <->
+  Django asserts association, not "Django requires Python". Encoding
+  direction would need a typed vocabulary and is an additive migration
+  when a feature actually needs it. **Evidence's natural key is
+  `(candidate_skill_id, source_type, source_identifier,
+  extraction_method)`**, so there is one representative excerpt per
+  candidate-skill/source/method: five mentions of "Python" in one
+  resume produce one evidence row, not five. That is sufficient for the
+  MVP because the excerpt exists to let a human verify the claim, and
+  one clear quotation does that as well as five near-identical ones,
+  while every question the MVP asks ("which sources support this?",
+  "how confident?", "show me why") is answered per source rather than
+  per mention; counting mentions is scoring, which belongs to Prompt
+  4.x. Wanting multiple excerpts per source later is a contained,
+  additive change: add an `excerpt_hash` (or `occurrence_index`) column
+  and extend that unique constraint to include it — no change to
+  ownership, cascades, or any other table. `source_identifier` is a
+  polymorphic string, not an FK (no single FK can span resume/github/
+  manual), so deleting a resume leaves evidence citing an id that no
+  longer resolves — accepted for now, since nothing in 2.3 writes
+  evidence. `source_type`/`extraction_method` get no database CHECK,
+  matching `resumes.status`'s reasoning that a vocabulary should grow
+  without a migration; `confidence` DOES get one, because a numeric
+  range is a permanent invariant rather than a vocabulary.
+- **Outcome**: Migration `610680fe7d6a` (schema only — no rows, for the
+  same reason `266984262a64` did not enqueue Celery jobs). Taxonomy is
+  33 skills across 7 categories in `app/seeds/skill_taxonomy.py`, a
+  typed Python module rather than JSON so it is mypy-checked and can
+  carry the alias-quality rule in comments: an alias must be an
+  unambiguous technical identifier, never a common English word —
+  "next", "rest" and "node" were rejected on that basis to avoid false
+  matches in Prompt 2.4. `scripts/seed_skills.py` validates the file
+  (no duplicate skills, no alias shadowing a canonical slug, no alias
+  owned by two skills, no self- or dangling relations) before touching
+  the database, then upserts by slug and reconciles aliases/relations
+  by difference in one transaction — so a re-run writes nothing at all
+  (verified: `updated_at <> created_at` matches zero rows after three
+  runs) and skills absent from the file are never touched. Covered by
+  `tests/test_skill_taxonomy.py` (constraints, cascades, RESTRICT,
+  confidence bounds, multi-source evidence) and
+  `tests/test_seed_skills.py` (idempotency asserted on ids and
+  timestamps, adoption of a user-coined row, off-taxonomy survival,
+  repair of hand-edits, alias/relation reconciliation, and an
+  integration test proving a profile `PATCH` of "python" reuses the
+  seeded row instead of coining a second).
+
 <!-- Add new entries above this line, most recent first. -->
