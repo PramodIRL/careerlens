@@ -119,7 +119,13 @@ def _clean_tables() -> None:
         engine = create_async_engine(settings.database_url, connect_args=_SEARCH_PATH_CONNECT_ARGS)
         try:
             async with engine.begin() as conn:
-                await conn.execute(text("TRUNCATE refresh_tokens, users RESTART IDENTITY CASCADE"))
+                await conn.execute(
+                    text(
+                        "TRUNCATE refresh_tokens, users, profiles, skills, "
+                        "profile_target_roles, profile_target_skills "
+                        "RESTART IDENTITY CASCADE"
+                    )
+                )
         finally:
             await engine.dispose()
 

@@ -222,4 +222,52 @@ Add one entry per decision, most recent first.
   (concurrent + sequential), multi-generation reuse, and reuse after the
   grace window, each still triggering the original cascade behavior.
 
+- **Date**: 2026-08-23
+- **Decision**: For the candidate profile (Prompt 1.3): a `profiles`
+  table keyed 1:1 on `users.id` (its own `user_id` primary key, no
+  separate surrogate id) for scalar fields; a canonical, deduplicated
+  `skills` lookup table (`name` + a lowercased `slug` unique key) linked
+  through a `profile_target_skills` join table for declared target
+  skills; and a plain normalized `profile_target_roles` text table (no
+  lookup table) for target roles. Endpoints are id-addressable —
+  `GET`/`PATCH /api/v1/profiles/{user_id}` — with an explicit ownership
+  check (`user_id != current_user.id` → 403) as the first line of both
+  handlers, rather than an implicit self-only `/profile`.
+- **Problem**: Six fields to store, two of them multi-valued
+  (target roles, target skills), with no existing product tables to
+  extend. Needed a normalization approach for the multi-valued fields,
+  and an endpoint shape that actually demonstrates and tests ownership
+  enforcement rather than making cross-user access structurally
+  unreachable.
+- **Alternatives**: (1) Comma-separated `target_roles`/`target_skills`
+  text columns on `profiles` directly — violates 1NF, turns "does this
+  profile want skill X" into string matching instead of a join, and
+  can't dedupe/canonicalize. (2) A `roles` lookup table mirroring
+  `skills`, for symmetry. (3) A self-only `/api/v1/profile` endpoint
+  (no id in the path, always scoped to the caller), matching the
+  existing `/api/v1/auth/me` idiom.
+- **Trade-off**: Skills get a lookup table because Prompt 2.x's
+  resume-extracted skills and later job-required skills are expected to
+  match against this exact same canonical identity for evidence-first
+  scoring (project brief's core rule) — "Python" and "python" must
+  resolve to one row across the whole system, not just within one
+  profile. Target roles have no known cross-entity matching need yet —
+  they're a declared preference, not a scored signal — so a `roles`
+  lookup table would be speculative abstraction; a plain normalized
+  text table (still 1NF: one row per role, no comma-separated list)
+  covers today's requirement without it. The id-addressable endpoint
+  shape means ownership is a runtime-checked property with a real
+  403 test, not a structural guarantee — marginally more code (one
+  explicit comparison) than a self-only route, but it is what makes
+  "ownership-enforced endpoints" and "a cross-user access failure test"
+  (as asked for) meaningful rather than vacuous.
+- **Outcome**: `profiles`, `skills`, `profile_target_roles`,
+  `profile_target_skills` (migration `8156d76f48cc`). `PATCH` uses
+  Pydantic's `exclude_unset` for partial updates; an omitted field means
+  "unchanged", explicit `null` clears an optional scalar, and
+  `target_roles`/`target_skills` fully replace the existing set when
+  present. Covered by `tests/test_profile.py`, including
+  `test_cannot_get_another_users_profile` and
+  `test_cannot_patch_another_users_profile`.
+
 <!-- Add new entries above this line, most recent first. -->

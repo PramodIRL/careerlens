@@ -1,5 +1,6 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const AUTH_BASE = `${API_BASE}/api/v1/auth`;
+const PROFILE_BASE = `${API_BASE}/api/v1/profiles`;
 
 export interface AccessTokenResponse {
   access_token: string;
@@ -123,4 +124,73 @@ export async function getCurrentUser(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as UserResponse;
+}
+
+// --- Candidate profile (Prompt 1.3) ---
+
+export type ExperienceLevel = "student" | "junior" | "mid" | "senior";
+
+export interface ProfileResponse {
+  user_id: string;
+  full_name: string | null;
+  headline: string | null;
+  city: string | null;
+  country: string | null;
+  experience_level: ExperienceLevel | null;
+  target_roles: string[];
+  target_skills: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** PATCH body. Mirrors the API's partial-update contract: a field left
+ * `undefined` is omitted from the JSON body entirely (unchanged
+ * server-side); `null` explicitly clears an optional scalar field;
+ * `target_roles`/`target_skills`, when included, fully replace the
+ * profile's existing set. See apps/api/app/schemas/profile.py. */
+export interface ProfileUpdatePayload {
+  full_name?: string | null;
+  headline?: string | null;
+  city?: string | null;
+  country?: string | null;
+  experience_level?: ExperienceLevel | null;
+  target_roles?: string[];
+  target_skills?: string[];
+}
+
+/** Fetches the given user's profile — the API only ever returns 200 for
+ * the caller's own `userId` (403 otherwise); see the ownership-enforced
+ * `/api/v1/profiles/{user_id}` routes and docs/decisions.md. */
+export async function getProfile(
+  accessToken: string,
+  userId: string,
+): Promise<ProfileResponse> {
+  const response = await fetch(`${PROFILE_BASE}/${userId}`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as ProfileResponse;
+}
+
+export async function updateProfile(
+  accessToken: string,
+  userId: string,
+  patch: ProfileUpdatePayload,
+): Promise<ProfileResponse> {
+  const response = await fetch(`${PROFILE_BASE}/${userId}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as ProfileResponse;
 }

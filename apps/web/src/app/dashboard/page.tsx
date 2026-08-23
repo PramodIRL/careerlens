@@ -5,8 +5,10 @@ import { useEffect, useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 
+import ProfileForm from "./profile-form";
+
 export default function DashboardPage() {
-  const { status, user, logout } = useAuth();
+  const { status, user, accessToken, logout } = useAuth();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -34,14 +36,14 @@ export default function DashboardPage() {
     );
   }
 
-  if (status !== "authenticated" || !user) {
+  if (status !== "authenticated" || !user || !accessToken) {
     // The redirect effect above is already firing; nothing meaningful
     // to show for the brief moment before navigation completes.
     return null;
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-zinc-50 p-8 dark:bg-black">
+    <main className="flex min-h-screen flex-col items-center gap-6 bg-zinc-50 p-8 dark:bg-black">
       <div className="w-full max-w-sm text-center">
         <h1 className="mb-2 text-2xl font-semibold text-black dark:text-zinc-50">
           Dashboard
@@ -57,6 +59,13 @@ export default function DashboardPage() {
         >
           {loggingOut ? "Logging out…" : "Log out"}
         </button>
+      </div>
+
+      <div className="w-full max-w-sm">
+        <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+          Your profile
+        </h2>
+        <ProfileForm accessToken={accessToken} userId={user.id} />
       </div>
     </main>
   );
