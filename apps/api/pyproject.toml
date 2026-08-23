@@ -14,6 +14,9 @@ dependencies = [
     "pyjwt>=2.9",
     "email-validator>=2.2",
     "python-multipart>=0.0.32",
+    "celery[redis]>=5.6.3",
+    "pypdf>=6.16.2",
+    "python-docx>=1.2.0",
 ]
 
 [dependency-groups]
@@ -40,3 +43,11 @@ select = ["E", "F", "I", "UP"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+# celery ships no py.typed marker / stubs — mypy would otherwise treat
+# every import from it as an error (not just Any). This is the standard
+# way to say "trust this untyped third-party library", scoped to just
+# celery rather than loosening strict mode project-wide.
+[[tool.mypy.overrides]]
+module = "celery.*"
+ignore_missing_imports = true

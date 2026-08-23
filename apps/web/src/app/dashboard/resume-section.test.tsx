@@ -28,7 +28,8 @@ const RESUME_A = {
   original_filename: "Resume.pdf",
   content_type: "application/pdf",
   file_size_bytes: 154_000,
-  status: "uploaded" as const,
+  status: "succeeded" as const,
+  error_message: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
@@ -55,7 +56,7 @@ describe("resume section", () => {
 
     expect(await screen.findByText("Resume.pdf")).toBeInTheDocument();
     expect(screen.getByText(/150\.4 KB/)).toBeInTheDocument();
-    expect(screen.getByText(/uploaded/)).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(listResumesMock).toHaveBeenCalledWith(ACCESS_TOKEN);
   });
 
@@ -69,9 +70,30 @@ describe("resume section", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the safe error message for a failed resume", async () => {
+    listResumesMock.mockResolvedValue([
+      {
+        ...RESUME_A,
+        status: "failed",
+        error_message: "the document could not be read",
+      },
+    ]);
+
+    renderSection();
+
+    expect(await screen.findByText("Failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("the document could not be read"),
+    ).toBeInTheDocument();
+  });
+
   it("uploads a selected file and adds it to the list", async () => {
     listResumesMock.mockResolvedValue([]);
-    uploadResumeMock.mockResolvedValue(RESUME_A);
+    uploadResumeMock.mockResolvedValue({
+      ...RESUME_A,
+      status: "queued",
+      error_message: null,
+    });
 
     renderSection();
     await screen.findByText(/no resumes uploaded yet/i);
@@ -85,6 +107,7 @@ describe("resume section", () => {
     expect(token).toBe(ACCESS_TOKEN);
     expect(file.name).toBe("resume.pdf");
     expect(await screen.findByText("Resume.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Queued")).toBeInTheDocument();
   });
 
   it("shows the API's error message when an upload is rejected", async () => {
@@ -143,4 +166,35 @@ describe("resume section", () => {
     );
     expect(screen.getByText("Resume.pdf")).toBeInTheDocument();
   });
+
+  it("polls while a resume is queued and stops once it reaches a terminal state", async () => {
+    const queued = {
+      ...RESUME_A,
+      status: "queued" as const,
+      error_message: null,
+    };
+    const succeeded = {
+      ...RESUME_A,
+      status: "succeeded" as const,
+      error_message: null,
+    };
+    listResumesMock
+      .mockResolvedValueOnce([queued])
+      .mockResolvedValueOnce([succeeded]);
+
+    renderSection();
+    await screen.findByText("Queued");
+    expect(listResumesMock).toHaveBeenCalledTimes(1);
+
+    // The real 2s poll interval firing brings back a terminal status.
+    await waitFor(() => expect(listResumesMock).toHaveBeenCalledTimes(2), {
+      timeout: 4000,
+    });
+    await screen.findByText("Ready");
+
+    // No further polling once nothing is pending.
+    listResumesMock.mockClear();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(listResumesMock).not.toHaveBeenCalled();
+  }, 10000);
 });

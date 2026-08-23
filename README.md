@@ -185,10 +185,13 @@ Neither workflow uses real credentials or deploys anything.
 ## Start / stop
 
 ```bash
-make start      # Postgres + Redis via Docker Compose
-make start-web  # Next.js dev server (separate terminal)
-make start-api  # FastAPI dev server (separate terminal)
-make stop       # stop the Docker Compose data services
+make start        # Postgres + Redis via Docker Compose
+make start-web    # Next.js dev server (separate terminal)
+make start-api    # FastAPI dev server (separate terminal)
+make start-worker # Celery resume-extraction worker (separate terminal;
+                   # only needed to actually process uploaded resumes —
+                   # everything else works without it)
+make stop         # stop the Docker Compose data services
 ```
 
 ## Troubleshooting

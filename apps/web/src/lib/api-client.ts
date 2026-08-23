@@ -196,12 +196,15 @@ export async function updateProfile(
   return (await response.json()) as ProfileResponse;
 }
 
-// --- Resumes (Prompt 2.1) ---
+// --- Resumes (Prompt 2.1 upload/list/delete; Prompt 2.2 extraction status) ---
 
-export type ResumeStatus = "uploaded" | "processing" | "completed" | "failed";
+export type ResumeStatus = "queued" | "processing" | "succeeded" | "failed";
 
-/** Resume metadata — deliberately has no storage path or file-content
- * field. See apps/api/app/schemas/resume.py's ResumeResponse. */
+/** Resume metadata — deliberately has no storage path or extracted-text
+ * field. See apps/api/app/schemas/resume.py's ResumeResponse: `status`
+ * and `error_message` are this app's extraction *status* endpoint —
+ * there is no separate route, and no endpoint returns the extracted
+ * text itself in this prompt. */
 export interface ResumeResponse {
   id: string;
   user_id: string;
@@ -209,6 +212,8 @@ export interface ResumeResponse {
   content_type: string;
   file_size_bytes: number;
   status: ResumeStatus;
+  // A curated, safe reason — only ever set when status === "failed".
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 }

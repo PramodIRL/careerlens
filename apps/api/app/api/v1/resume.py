@@ -1,4 +1,5 @@
-"""Resume upload, list, fetch-metadata, and delete endpoints (Prompt 2.1).
+"""Resume upload, list, fetch-metadata, and delete endpoints (Prompt 2.1),
+plus triggering asynchronous text extraction on upload (Prompt 2.2).
 
 Ownership enforcement: unlike `/profiles/{user_id}` (1:1 with a user, so
 addressable by the user's own id), a resume is addressed by its own
@@ -9,9 +10,13 @@ Fetch-metadata and delete load the row by `resume_id` first, then check
 `resume.user_id == current_user.id` before returning anything — not
 found is 404, found-but-not-yours is 403. See docs/decisions.md.
 
-No text extraction, background worker, skill extraction, or LLM use
-happens here or anywhere in this module — see docs/project-brief.md and
-the Prompt 2.1 plan for what's explicitly deferred to later prompts.
+There is no separate extraction "status" route: `GET /{resume_id}` and
+`GET /` already return `status`/`error_message` (app/schemas/resume.py),
+which is all the dashboard's polling UI needs — see app/worker.py for
+the actual extraction logic. No text extraction *content*, skill
+extraction, or LLM use happens in this module — extracted text is
+never returned by any endpoint here (see docs/project-brief.md and the
+Prompt 2.1/2.2 plans for what's explicitly deferred to later prompts).
 """
 
 import uuid
@@ -28,6 +33,7 @@ from app.models.user import User
 from app.schemas.resume import ResumeResponse, ResumeStatus
 from app.settings import get_settings
 from app.storage import ResumeStorage, get_resume_storage
+from app.worker import enqueue_extraction
 
 router = APIRouter()
 
@@ -113,6 +119,7 @@ def _to_response(resume: Resume) -> ResumeResponse:
         content_type=resume.content_type,
         file_size_bytes=resume.file_size_bytes,
         status=ResumeStatus(resume.status),
+        error_message=resume.error_message,
         created_at=resume.created_at,
         updated_at=resume.updated_at,
     )
@@ -154,11 +161,17 @@ async def upload_resume(
         original_filename=filename,
         content_type=content_type,
         file_size_bytes=len(content),
-        status=ResumeStatus.UPLOADED.value,
+        status=ResumeStatus.QUEUED.value,
     )
     db.add(resume)
     await db.commit()
     await db.refresh(resume)
+
+    # Best-effort (see docs/decisions.md): the upload has already fully
+    # succeeded above — a failure here just leaves this resume "queued"
+    # with nothing to process it yet, rather than failing the upload.
+    enqueue_extraction(resume.id)
+
     return _to_response(resume)
 
 
