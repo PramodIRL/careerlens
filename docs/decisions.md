@@ -397,4 +397,50 @@ Add one entry per decision, most recent first.
   be caught by a call-count assertion (as added) or live browser
   verification, not by the mock alone.
 
+- **Date**: 2026-08-23
+- **Decision**: Add a `supersededRef` to `AuthProvider` (`auth-context.tsx`):
+  set to `true` the instant an explicit `login()` starts, checked by the
+  mount-time silent-refresh effect's `.then`/`.catch` before either
+  applies its result. Once set, it's never reset.
+- **Problem**: Found live (not by any existing test — this repo had no
+  `auth-context` test at all): the mount-time `refresh()` effect and a
+  manual `login()` are two independent flows that both write
+  `status`/`user`/`accessToken` with no sequencing. If `refresh()`
+  (started on page load, restoring a session from the HttpOnly cookie)
+  was still pending or hadn't even fired yet when the user submitted the
+  login form, and it settled *after* login already succeeded, its
+  unconditional `setStatus("unauthenticated")` silently reverted a real,
+  more recent session — no error, no console warning, just a reverted
+  `status` that then bounced `/dashboard`'s protective effect back to
+  `/login`, leaving the "Signing in…" button and the router's pending
+  transition both stuck. Directly proved live by patching `fetch` to
+  delay `/auth/refresh` and confirming `login()` could complete (200,
+  200, `/dashboard` rendered) while the delayed `refresh()` was still
+  unsettled — i.e., two independent writers to the same state, live,
+  not just in theory.
+- **Alternatives**: (1) A generation/version counter incremented on every
+  auth-changing operation, checked by every writer — more general, but
+  overkill for the one actual conflict (mount-refresh vs. login);
+  nothing else currently races. (2) Cancel the mount effect's promise
+  chain outright once `login()` starts (e.g. via `AbortController`) —
+  more "correct" in the sense of not doing unnecessary work, but the
+  network request has typically already been sent by the time a user
+  can react, so aborting saves nothing and adds a fetch-abort-handling
+  path for no behavioral difference from just ignoring the result.
+- **Trade-off**: The ref never resets after first use, which is safe
+  only because the mount effect's promise settles exactly once per
+  `AuthProvider` mount (verified across: initial refresh, explicit
+  login, logout, a later login on the same still-mounted provider, and
+  a full page reload/remount, which creates a fresh ref via a fresh
+  component instance) — a design that would break if the mount effect
+  were ever changed to run more than once per mount.
+- **Outcome**: `apps/web/src/lib/auth-context.tsx`. New
+  `apps/web/src/lib/auth-context.test.tsx`, using a manually-sequenced
+  promise (same technique as `api-client.test.ts`'s `refresh()` dedup
+  test) to deterministically prove the fix — confirmed to fail against
+  the old code (`status: unauthenticated`) and pass against the fix.
+  Live-verified twice more: a normal login, and the same delayed-refresh
+  race that previously exposed the bug, both ending on `/dashboard`
+  without reverting.
+
 <!-- Add new entries above this line, most recent first. -->
