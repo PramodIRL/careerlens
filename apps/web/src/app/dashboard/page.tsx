@@ -13,8 +13,14 @@ export default function DashboardPage() {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
-  // Protected navigation: if the mount-time silent refresh (in
-  // AuthProvider) determined there's no valid session, leave.
+  // Protected navigation: the single redirect authority for leaving this
+  // page whenever there's no valid session — covers both a mount-time
+  // silent refresh (in AuthProvider) finding no session, and logout()
+  // below setting status to "unauthenticated". handleLogout deliberately
+  // does not also call router.push itself: a second, independent push to
+  // the same href raced with this effect's (two overlapping App Router
+  // transitions to /login), which could leave client navigation stuck.
+  // See docs/decisions.md.
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login");
@@ -24,7 +30,6 @@ export default function DashboardPage() {
   async function handleLogout() {
     setLoggingOut(true);
     await logout();
-    router.push("/login");
   }
 
   if (status === "loading") {
