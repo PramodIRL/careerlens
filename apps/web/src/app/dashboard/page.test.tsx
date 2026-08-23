@@ -92,7 +92,7 @@ describe("dashboard protected navigation", () => {
     expect(pushMock).not.toHaveBeenCalled();
   });
 
-  it("logs out and redirects to /login", async () => {
+  it("logs out and redirects to /login exactly once", async () => {
     refreshMock.mockResolvedValue({
       access_token: "tok",
       token_type: "bearer",
@@ -108,5 +108,13 @@ describe("dashboard protected navigation", () => {
 
     await waitFor(() => expect(logoutMock).toHaveBeenCalled());
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/login"));
+
+    // Regression guard: handleLogout used to call router.push("/login")
+    // itself *in addition to* the unauthenticated-status effect above
+    // also pushing once logout() flipped status — two redirects racing
+    // for the same navigation, which could leave the real Next.js
+    // router's client-side transition stuck. There must be exactly one
+    // push, from the effect alone, once everything above has settled.
+    expect(pushMock).toHaveBeenCalledTimes(1);
   });
 });

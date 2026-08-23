@@ -357,4 +357,44 @@ Add one entry per decision, most recent first.
   `tests/test_local_storage.py`; verified live via a real browser
   upload → list → delete cycle with fictional sample PDF/DOCX files.
 
+- **Date**: 2026-08-23
+- **Decision**: Remove the explicit `router.push("/login")` from
+  `DashboardPage`'s `handleLogout` (`apps/web/src/app/dashboard/page.tsx`);
+  the existing `useEffect` that redirects whenever `status ===
+  "unauthenticated"` is now the sole place that navigates to `/login`.
+- **Problem**: Found live in the real browser (not caught by the
+  existing mocked-router unit tests): logging out fired **two**
+  separate client-side navigations to `/login` — one from
+  `handleLogout`'s own `router.push`, one from the protective effect
+  reacting to `logout()` setting `status` to `"unauthenticated"`.
+  Confirmed at the network level (two back-to-back, identical `GET
+  /login?_rsc=...` requests per logout) on every repro attempt. Two
+  overlapping App Router client transitions to the same href is exactly
+  the kind of race that can leave the router's pending-navigation state
+  stuck — reported symptom: the page visually stuck on the dev
+  "Rendering…" indicator and non-interactive until a hard refresh,
+  intermittent because it depends on how much the two transitions
+  overlap (worse under dev-mode HMR/compile latency).
+- **Alternatives**: (1) Guard against the double push with a ref/flag
+  (e.g. `hasNavigatedRef`) — works, but treats the symptom rather than
+  the cause, and leaves two competing "authorities" deciding when to
+  redirect. (2) Keep the explicit push in `handleLogout` and remove the
+  effect instead — rejected: the effect is also what protects
+  `/dashboard` when a mount-time silent refresh finds no session at
+  all, a case `handleLogout` never covers.
+- **Trade-off**: None of substance — the effect already unconditionally
+  handles every case that causes `status` to become `"unauthenticated"`,
+  logout included, so removing the redundant call is strictly a
+  simplification, not a behavior change from the user's perspective.
+- **Outcome**: One redirect authority. Verified live, twice: exactly one
+  `GET /login?_rsc=...` per logout, page interactive immediately after
+  in both runs. `tests/dashboard/page.test.tsx`'s logout test
+  strengthened to assert `pushMock` was called `toHaveBeenCalledTimes(1)`
+  — confirmed this fails (`2 times`) against the old code and passes
+  against the fix. Noted gap: every navigation test in this repo mocks
+  `next/navigation`'s `useRouter` entirely, so no unit test exercises
+  the real App Router transition machinery — this class of bug can only
+  be caught by a call-count assertion (as added) or live browser
+  verification, not by the mock alone.
+
 <!-- Add new entries above this line, most recent first. -->
