@@ -122,7 +122,7 @@ def _clean_tables() -> None:
                 await conn.execute(
                     text(
                         "TRUNCATE refresh_tokens, users, profiles, skills, "
-                        "profile_target_roles, profile_target_skills "
+                        "profile_target_roles, profile_target_skills, resumes "
                         "RESTART IDENTITY CASCADE"
                     )
                 )

@@ -13,6 +13,9 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
+# Uploaded resume files (local dev storage — see apps/api/app/storage/)
+apps/api/var/
+
 # Env
 .env
 .env.local

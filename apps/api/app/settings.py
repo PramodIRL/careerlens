@@ -57,6 +57,19 @@ class Settings(BaseSettings):
     # timing without meaningfully helping an attacker.
     auth_refresh_reuse_grace_seconds: int = 5
 
+    # Local filesystem directory uploaded resumes are written to
+    # (app/storage/local.py), relative to the process's working
+    # directory — every Makefile target and `uv run` invocation in this
+    # repo runs with apps/api as cwd, so this resolves to
+    # apps/api/var/resumes in practice. Not committed (see .gitignore).
+    # A future S3-compatible backend replaces this without changing any
+    # resume domain code — see app/storage/base.py.
+    resume_storage_dir: str = "var/resumes"
+    # Maximum accepted resume upload size, in bytes. Default: 5 MiB —
+    # comfortably more than a text-based PDF/DOCX resume needs, without
+    # being reckless.
+    resume_max_size_bytes: int = 5 * 1024 * 1024
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""

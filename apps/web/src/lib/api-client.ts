@@ -1,6 +1,7 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const AUTH_BASE = `${API_BASE}/api/v1/auth`;
 const PROFILE_BASE = `${API_BASE}/api/v1/profiles`;
+const RESUME_BASE = `${API_BASE}/api/v1/resumes`;
 
 export interface AccessTokenResponse {
   access_token: string;
@@ -193,4 +194,77 @@ export async function updateProfile(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as ProfileResponse;
+}
+
+// --- Resumes (Prompt 2.1) ---
+
+export type ResumeStatus = "uploaded" | "processing" | "completed" | "failed";
+
+/** Resume metadata — deliberately has no storage path or file-content
+ * field. See apps/api/app/schemas/resume.py's ResumeResponse. */
+export interface ResumeResponse {
+  id: string;
+  user_id: string;
+  original_filename: string;
+  content_type: string;
+  file_size_bytes: number;
+  status: ResumeStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Uploads a resume file (PDF or DOCX). The API validates extension,
+ * content type, file signature, size, and filename — see
+ * apps/api/app/api/v1/resume.py — and this function surfaces whatever
+ * it rejects as an ApiError, the same as every other call here. */
+export async function uploadResume(
+  accessToken: string,
+  file: File,
+): Promise<ResumeResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(RESUME_BASE, {
+    method: "POST",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    // No Content-Type header here: the browser sets
+    // multipart/form-data with the correct boundary itself when the
+    // body is a FormData — setting it manually would omit that
+    // boundary and break parsing on the server.
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as ResumeResponse;
+}
+
+/** Lists the caller's own resumes, newest first — the API only ever
+ * returns the caller's own (see the ownership-enforced
+ * `/api/v1/resumes` routes). */
+export async function listResumes(
+  accessToken: string,
+): Promise<ResumeResponse[]> {
+  const response = await fetch(RESUME_BASE, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as ResumeResponse[];
+}
+
+export async function deleteResume(
+  accessToken: string,
+  resumeId: string,
+): Promise<void> {
+  const response = await fetch(`${RESUME_BASE}/${resumeId}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
 }
