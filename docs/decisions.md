@@ -270,4 +270,35 @@ Add one entry per decision, most recent first.
   `test_cannot_get_another_users_profile` and
   `test_cannot_patch_another_users_profile`.
 
+- **Date**: 2026-08-23
+- **Decision**: Add `"PATCH"` to `CORSMiddleware`'s `allow_methods` in
+  `apps/api/app/main.py`.
+- **Problem**: Found live via the browser: Prompt 1.3's profile update
+  endpoint uses `PATCH /api/v1/profiles/{user_id}`, but
+  `allow_methods` was still `["GET", "POST"]` from Prompt 1.1 (auth-only
+  at the time). Starlette's `CORSMiddleware` rejects a preflight whose
+  `Access-Control-Request-Method` isn't in `allow_methods` with a plain
+  400 *before* the request reaches routing — so every "Save profile"
+  click failed at the preflight, the real `PATCH` was never sent, and
+  the route/ownership/validation code (already covered by
+  `tests/test_profile.py`) was never at fault or even reached.
+- **Alternatives**: `allow_methods=["*"]` (wildcard everything the app
+  will ever need, present or future); route around CORS by proxying
+  `/api` through the Next.js dev server instead of calling `localhost:8000`
+  directly.
+- **Trade-off**: A wildcard never has this class of bug again, but also
+  silently allows any future method (e.g. `DELETE`) without a deliberate
+  decision to expose it — listing methods explicitly means adding one is
+  a visible, one-line change each time, matching how `POST` was added
+  explicitly in Prompt 1.1. Proxying through Next.js would remove the
+  cross-origin request (and this whole bug class) entirely, but is a
+  bigger architectural change than this fix warrants right now.
+- **Outcome**: `allow_methods=["GET", "POST", "PATCH"]`. Verified live
+  (preflight now returns `200` with `PATCH` in
+  `Access-Control-Allow-Methods`; a real browser "Save profile" now
+  completes and persists across reload) and by
+  `tests/test_cors.py` (`test_preflight_allows_patch_on_the_profile_endpoint`,
+  plus non-regression/negative coverage for the existing auth `POST`
+  preflight and an unconfigured origin).
+
 <!-- Add new entries above this line, most recent first. -->
