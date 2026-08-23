@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -38,6 +39,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus("authenticated");
   }, []);
 
+  // Set the instant an explicit login() starts, and never reset — see
+  // login() below and docs/decisions.md. The mount-time refresh effect
+  // checks this before applying its own result, so a login that
+  // completes *while the initial silent refresh is still in flight*
+  // can't be clobbered by that refresh settling later (with a stale
+  // success *or* a stale failure — either would otherwise overwrite a
+  // real, more recent session). A ref rather than state: reading it must
+  // never itself cause a re-render, and it's only ever read from inside
+  // the effect below, not from render output.
+  const supersededRef = useRef(false);
+
   // On mount (including a full page reload), try to silently exchange
   // the HttpOnly refresh cookie — if the browser still has one — for a
   // fresh access token, so a reload doesn't look logged-out. Neither
@@ -49,11 +61,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api
       .refresh()
       .then(async (tokens) => {
-        if (cancelled) return;
+        if (cancelled || supersededRef.current) return;
         await applySession(tokens.access_token);
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && !supersededRef.current) {
           setStatus("unauthenticated");
         }
       });
@@ -65,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (email: string, password: string) => {
+      supersededRef.current = true;
       const tokens = await api.login(email, password);
       await applySession(tokens.access_token);
     },
