@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.candidate_skill import router as candidate_skill_router
 from app.api.v1.health import router as health_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.resume import router as resume_router
@@ -43,3 +44,4 @@ app.include_router(health_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1/auth")
 app.include_router(profile_router, prefix="/api/v1/profiles")
 app.include_router(resume_router, prefix="/api/v1/resumes")
+app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
