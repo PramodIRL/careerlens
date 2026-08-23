@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make migrate-status Show the current Alembic migration"
 	@echo "  make migration name=\"...\"  Create a new (blank) migration"
 	@echo "  make requeue-stuck-resumes  Re-enqueue resumes stuck in 'queued' (safe to re-run)"
+	@echo "  make seed-skills    Seed/update the canonical skill taxonomy (safe to re-run)"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
 
 format:
@@ -84,6 +85,13 @@ migration:
 # more than once — see apps/api/scripts/requeue_stuck_resumes.py.
 requeue-stuck-resumes:
 	cd apps/api && uv run python -m scripts.requeue_stuck_resumes
+
+# Seeds (or re-seeds) the canonical skill taxonomy from
+# apps/api/app/seeds/skill_taxonomy.py. Safe and deterministic to run
+# repeatedly — edit the seed file, re-run this. Skills coined by users
+# are never touched. See apps/api/scripts/seed_skills.py.
+seed-skills:
+	cd apps/api && uv run python -m scripts.seed_skills
 
 smoke:
 	./scripts/smoke.sh
