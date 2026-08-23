@@ -443,4 +443,123 @@ Add one entry per decision, most recent first.
   race that previously exposed the bug, both ending on `/dashboard`
   without reverting.
 
+- **Date**: 2026-08-23
+- **Decision**: For resume text extraction (Prompt 2.2): Celery
+  (broker: the already-provisioned Redis, no result backend — Postgres,
+  the `resumes` row itself, is the only source of truth for job state),
+  `pypdf`/`python-docx` for deterministic extraction, and `resumes.status`
+  renamed `uploaded/processing/completed/failed` ->
+  `queued/processing/succeeded/failed` to match this prompt's own
+  wording. Duplicate/concurrent processing is prevented by an atomic
+  claim (`UPDATE resumes SET status='processing' WHERE status='queued'`)
+  rather than any queue-level dedup feature; retries distinguish
+  transient failures (a storage read error — worth retrying) from
+  permanent ones (a parse failure, or no extractable text — never
+  worth retrying, since the same bytes fail the same way every time).
+- **Problem**: Needed an async worker for a slow, request-blocking
+  operation (parsing an uploaded file), using infrastructure this
+  project already provisions, with job state a client can poll for,
+  safe (non-leaking) error messages, and correctness under duplicate/
+  concurrent triggering.
+- **Alternatives**: (1) `arq` (an asyncio-native Redis queue) instead
+  of Celery — would have avoided the sync/async bridge entirely
+  (`asyncio.run(...)` inside a sync Celery task calling back into async
+  SQLAlchemy), and was seriously considered — but `docs/project-brief.md`
+  names Celery specifically ("Redis and Celery only for processing that
+  should not block a request"), not just "a queue", so this follows
+  that rather than substituting a technically-tidier personal
+  preference. (2) A Celery result backend (also Redis) as the source of
+  truth for job state instead of a Postgres column — rejected: it would
+  create two places extraction state could live and disagree, for no
+  benefit here (nothing ever calls `.get()` on a Celery `AsyncResult`).
+  (3) arq's built-in `_job_id` dedup for duplicate prevention — not
+  applicable to Celery, and the atomic claim guards the thing that
+  actually matters (concurrent *execution*) regardless of what caused a
+  duplicate trigger, not just duplicate enqueueing.
+- **Trade-off**: Celery's task model is synchronous; bridging into
+  async SQLAlchemy/`ResumeStorage` per task execution (via
+  `asyncio.run`) is the accepted cost of using the framework the brief
+  specifies rather than the one that would have fit this codebase's
+  existing async-everywhere style most naturally. Internal retry state
+  (`attempt_count`) mirrors Celery's own `self.request.retries` rather
+  than being hand-maintained, keeping "how many times has this run" a
+  single source of truth. `task_eager_propagates` is deliberately left
+  off in tests — enabling it makes Celery's own internal retry
+  (`self.retry()`) propagate as an exception instead of being handled,
+  discovered by a real, reproducible test failure, not by reading docs
+  closely enough the first time.
+- **Outcome**: `apps/api/app/worker.py` (Celery app, task, atomic
+  claim, `enqueue_extraction`), `apps/api/app/extraction.py` (pure
+  pypdf/python-docx functions), new `resumes` columns
+  (`extracted_text`, `error_message`, `attempt_count`, `processed_at`;
+  migration `266984262a64`, which also data-migrates existing rows'
+  `status` values to the new vocabulary). `GET /api/v1/resumes` and
+  `GET /api/v1/resumes/{id}` (Prompt 2.1) serve as the status endpoint
+  as-is — no new route. Dashboard polls every 2s while any resume is
+  queued/processing. Covered by `tests/test_extraction.py` (successful
+  PDF/DOCX, malformed document, transient-failure retry-then-succeed,
+  retries-exhausted safe failure, duplicate-processing prevention,
+  idempotent re-run) via Celery's `task_always_eager` mode — no real
+  broker/worker/Redis connection needed for any of it.
+
+- **Date**: 2026-08-23
+- **Decision**: Reconcile the resumes that Prompt 2.2's migration left
+  stranded in `queued` with a one-off, manually-run backfill script
+  (`apps/api/scripts/requeue_stuck_resumes.py`, `make
+  requeue-stuck-resumes`) rather than any automatic mechanism. The
+  migration (`266984262a64`) renames existing Prompt 2.1 rows
+  `uploaded -> queued` so legacy and new rows share one vocabulary and
+  a never-processed resume looks the same however it got there — but
+  that rename is pure SQL and deliberately does *not* enqueue Celery
+  jobs: a migration must stay applicable without Redis/Celery being
+  reachable (CI, a fresh environment, or any `alembic upgrade head` run
+  before a broker exists), and coupling schema changes to a live broker
+  would make migrations fail for reasons that have nothing to do with
+  the schema. The consequence is a real gap — those rows have no Celery
+  message and `enqueue_extraction` is only ever called from the upload
+  endpoint — which the script closes by querying `status = 'queued'`
+  and calling that same existing `enqueue_extraction`, duplicating no
+  task logic.
+- **Problem**: Legacy Prompt 2.1 resumes became `queued` with nothing
+  to process them, and would have stayed stuck there permanently: there
+  is no periodic sweep, no worker-startup hook, and no manual retry
+  endpoint.
+- **Alternatives**: (1) Enqueue from inside the migration — rejected
+  for the broker-coupling reason above. (2) A `worker_ready` signal
+  sweep on Celery worker startup — genuinely considered, and it would
+  also self-heal the separate best-effort-enqueue gap, but it adds
+  permanent runtime behavior (and, per Celery's `Consumer.start()`
+  reconnect loop, re-fires on every broker reconnect, not just once per
+  process) to fix what is a one-time historical data gap. (3) Celery
+  Beat periodic reconciliation — a whole extra process to run and
+  supervise, far past what this gap warrants.
+- **Trade-off**: The fix is manual, so it only helps if someone
+  actually runs it after migrating — accepted, because the gap is
+  one-time and this project is local-only. The still-open, separately
+  documented gap is that `enqueue_extraction` is best-effort at upload
+  time (a Redis outage silently leaves a new resume `queued`); this
+  script also fixes those rows when run, but nothing runs it
+  automatically, so that remains a known limitation rather than a
+  solved problem. The script is a sync entry point doing async DB work
+  via `asyncio.run`, mirroring `app/worker.py`'s own split — enqueueing
+  is synchronous broker I/O and belongs outside the event loop (this
+  also happens to be what makes it testable under `task_always_eager`,
+  where an enqueue inside a running loop would hit "asyncio.run()
+  cannot be called from a running event loop").
+- **Outcome**: The script is safe to rerun by construction, and needs
+  no dedup logic of its own: it is read-only against `resumes` (it
+  never changes status — the only transition out of `queued` stays the
+  worker's atomic `UPDATE ... WHERE status = 'queued'` claim in
+  `_claim_resume`), and its `status = 'queued'` filter already skips
+  anything processing or finished. If the same resume is enqueued twice
+  anyway — a rerun racing a still-unconsumed message, or two operators
+  — Postgres serializes the two claim UPDATEs and only the first
+  matches a row; the second no-ops without writing. So a duplicate
+  costs one wasted task execution, never double processing. Covered by
+  `tests/test_requeue_stuck_resumes.py` (migrated PDF/DOCX row
+  re-enqueued and processed, rerun is a no-op, redundant in-flight
+  enqueue is harmless, processing/succeeded/failed rows skipped,
+  mixed-set filtering, and malformed/transient-retry/retries-exhausted
+  behavior all still intact through this path).
+
 <!-- Add new entries above this line, most recent first. -->

@@ -8,11 +8,35 @@ import {
   listResumes,
   uploadResume,
   type ResumeResponse,
+  type ResumeStatus,
 } from "@/lib/api-client";
 
 interface ResumeSectionProps {
   accessToken: string;
 }
+
+// How often to re-fetch the list while any resume is still
+// queued/processing (Prompt 2.2's extraction worker). Frequent enough
+// to feel responsive for a job that typically finishes in well under a
+// few seconds, without hammering the API while it's not needed — the
+// polling effect below stops entirely once nothing is pending.
+const POLL_INTERVAL_MS = 2000;
+
+const PENDING_STATUSES: ResumeStatus[] = ["queued", "processing"];
+
+const STATUS_LABELS: Record<ResumeStatus, string> = {
+  queued: "Queued",
+  processing: "Processing…",
+  succeeded: "Ready",
+  failed: "Failed",
+};
+
+const STATUS_CLASSES: Record<ResumeStatus, string> = {
+  queued: "text-zinc-500 dark:text-zinc-400",
+  processing: "text-blue-600 dark:text-blue-400",
+  succeeded: "text-green-700 dark:text-green-400",
+  failed: "text-red-700 dark:text-red-400",
+};
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -57,6 +81,33 @@ export default function ResumeSection({ accessToken }: ResumeSectionProps) {
       cancelled = true;
     };
   }, [accessToken]);
+
+  // Polls the list while any resume is still queued/processing, and
+  // stops as soon as none are (including immediately, if nothing ever
+  // was) — re-evaluated whenever `resumes` changes, so a newly
+  // uploaded resume (or a delete) correctly starts/stops this again.
+  // Silently retries on a transient poll failure rather than
+  // surfacing a page-level error for it — the next tick tries again.
+  useEffect(() => {
+    const hasPending = resumes.some((resume) =>
+      PENDING_STATUSES.includes(resume.status),
+    );
+    if (!hasPending) return;
+
+    let cancelled = false;
+    const interval = setInterval(() => {
+      listResumes(accessToken)
+        .then((list) => {
+          if (!cancelled) setResumes(list);
+        })
+        .catch(() => undefined);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [accessToken, resumes]);
 
   // Uploads as soon as a file is picked — no separate "confirm" step —
   // simplest flow the native file input supports on its own.
@@ -154,9 +205,17 @@ export default function ResumeSection({ accessToken }: ResumeSectionProps) {
                   {resume.original_filename}
                 </p>
                 <p className="text-xs text-zinc-500 dark:text-zinc-500">
-                  {formatFileSize(resume.file_size_bytes)} · {resume.status} ·{" "}
-                  {formatDate(resume.created_at)}
+                  {formatFileSize(resume.file_size_bytes)} ·{" "}
+                  <span className={STATUS_CLASSES[resume.status]}>
+                    {STATUS_LABELS[resume.status]}
+                  </span>{" "}
+                  · {formatDate(resume.created_at)}
                 </p>
+                {resume.status === "failed" && resume.error_message && (
+                  <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                    {resume.error_message}
+                  </p>
+                )}
               </div>
               <button
                 type="button"

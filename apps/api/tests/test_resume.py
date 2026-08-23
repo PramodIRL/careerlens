@@ -41,6 +41,7 @@ _EXPECTED_RESPONSE_KEYS = {
     "content_type",
     "file_size_bytes",
     "status",
+    "error_message",
     "created_at",
     "updated_at",
 }
@@ -61,6 +62,15 @@ def _use_temp_storage(tmp_path: Path) -> Generator[None, None, None]:
     app.dependency_overrides[get_resume_storage] = lambda: LocalResumeStorage(tmp_path)
     yield
     app.dependency_overrides.pop(get_resume_storage, None)
+
+
+@pytest.fixture(autouse=True)
+def _stub_enqueue_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests are about upload/list/get/delete, not extraction (see
+    # tests/test_extraction.py for that) — stubbed so they never touch a
+    # real Celery/Redis broker, the same way DB/storage are swapped for
+    # isolated fakes above rather than the real dev instances.
+    monkeypatch.setattr("app.api.v1.resume.enqueue_extraction", lambda resume_id: None)
 
 
 @pytest.fixture(autouse=True)
@@ -149,7 +159,8 @@ def test_upload_pdf_succeeds_and_response_never_includes_a_storage_path(
     assert body["original_filename"] == "My Resume.pdf"
     assert body["content_type"] == "application/pdf"
     assert body["file_size_bytes"] == len(_PDF_BYTES)
-    assert body["status"] == "uploaded"
+    assert body["status"] == "queued"
+    assert body["error_message"] is None
     assert body["user_id"] == user_id
 
 

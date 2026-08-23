@@ -70,6 +70,20 @@ class Settings(BaseSettings):
     # being reckless.
     resume_max_size_bytes: int = 5 * 1024 * 1024
 
+    # Redis is already provisioned via docker-compose (see the rate-limit
+    # decision in docs/decisions.md) — Prompt 2.2 is what finally uses it,
+    # as both the Celery broker and, for now, nothing else (no result
+    # backend: Postgres — the resumes row itself — is the single source
+    # of truth for extraction job state; see app/worker.py).
+    redis_url: str = "redis://localhost:6379/0"
+    # How many times a *transient* extraction failure (e.g. a storage
+    # read error) is retried via Celery's own retry mechanism before the
+    # job is marked permanently failed. Does not apply to permanent
+    # failures (a malformed document fails identically every time, so
+    # retrying it only delays the user-visible failure for nothing) —
+    # see app/worker.py's _TransientExtractionError / _PermanentExtractionError.
+    resume_extraction_max_retries: int = 2
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""
