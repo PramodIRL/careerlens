@@ -30,6 +30,7 @@ from app.extraction import ExtractionFailed, extract_docx_text, extract_pdf_text
 from app.models.resume import Resume
 from app.schemas.resume import ResumeStatus
 from app.settings import get_settings
+from app.skill_extraction import extract_skills_for_resume
 from app.storage import ResumeStorage, get_resume_storage
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,20 @@ async def _extract_and_persist(
             return False
 
         await _mark_succeeded(db, resume_id, text, attempt)
+
+        # Prompt 2.4: deterministic skill extraction over the text we
+        # just stored. Deliberately best-effort and non-fatal — text
+        # extraction genuinely succeeded, so a failure here must not
+        # flip the resume back to "failed" or trigger a Celery retry of
+        # work that is already done. The skills are simply missing until
+        # the next run.
+        try:
+            await extract_skills_for_resume(db, resume_id)
+        except Exception:
+            logger.exception(
+                "skill extraction failed for resume %s (text extraction still succeeded)",
+                resume_id,
+            )
         return False
 
 

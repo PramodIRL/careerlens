@@ -2,6 +2,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const AUTH_BASE = `${API_BASE}/api/v1/auth`;
 const PROFILE_BASE = `${API_BASE}/api/v1/profiles`;
 const RESUME_BASE = `${API_BASE}/api/v1/resumes`;
+const CANDIDATE_SKILL_BASE = `${API_BASE}/api/v1/candidate-skills`;
 
 export interface AccessTokenResponse {
   access_token: string;
@@ -272,4 +273,107 @@ export async function deleteResume(
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
+}
+
+// --- Candidate skills (Prompt 2.4) ---
+
+/** Review state of an extracted skill. "rejected" is a persistent
+ * tombstone rather than a deletion — it is what stops a future
+ * extraction run from re-suggesting a skill the user turned down, so
+ * rejected rows are still returned by the API and shown (collapsed) in
+ * the UI with the option to restore. There is deliberately no delete
+ * endpoint. See apps/api/app/schemas/skill.py. */
+export type CandidateSkillStatus = "suggested" | "confirmed" | "rejected";
+
+/** Only "confirmed" and "rejected" can be set by a user — "suggested"
+ * means "the extractor proposed this and nobody has reviewed it yet",
+ * which is not a state a person can return a skill to. */
+export type CandidateSkillDecision = "confirmed" | "rejected";
+
+export type EvidenceSourceType = "resume" | "github" | "manual";
+
+export interface SkillEvidenceResponse {
+  id: string;
+  source_type: EvidenceSourceType;
+  /** For resume evidence this is the caller's own resume id; for manual
+   * evidence, their user id. See the API model for the per-type
+   * contract. */
+  source_identifier: string;
+  /** A verbatim span from the source document. Null for evidence with
+   * nothing quotable, such as a manual assertion. */
+  excerpt: string | null;
+  extraction_method: string;
+  /** 0..1. Stored exactly server-side; exposed as a number here. */
+  confidence: number;
+  created_at: string;
+}
+
+export interface CandidateSkillResponse {
+  id: string;
+  skill_id: string;
+  skill_name: string;
+  skill_category: string | null;
+  status: CandidateSkillStatus;
+  evidence: SkillEvidenceResponse[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** The caller's own candidate skills with their supporting evidence —
+ * the API only ever returns the caller's own. */
+export async function listCandidateSkills(
+  accessToken: string,
+): Promise<CandidateSkillResponse[]> {
+  const response = await fetch(CANDIDATE_SKILL_BASE, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as CandidateSkillResponse[];
+}
+
+/** Manually claim a skill. `name` must be a curated taxonomy skill or a
+ * known alias — anything else is rejected with 422 and writes nothing.
+ * This is deliberately narrower than the profile's free-text target
+ * skills (Prompt 1.3), which do coin new skills; see
+ * apps/api/app/api/v1/candidate_skill.py for why. */
+export async function addCandidateSkill(
+  accessToken: string,
+  name: string,
+): Promise<CandidateSkillResponse> {
+  const response = await fetch(CANDIDATE_SKILL_BASE, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as CandidateSkillResponse;
+}
+
+export async function updateCandidateSkillStatus(
+  accessToken: string,
+  candidateSkillId: string,
+  status: CandidateSkillDecision,
+): Promise<CandidateSkillResponse> {
+  const response = await fetch(`${CANDIDATE_SKILL_BASE}/${candidateSkillId}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as CandidateSkillResponse;
 }

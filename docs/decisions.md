@@ -641,4 +641,69 @@ Add one entry per decision, most recent first.
   integration test proving a profile `PATCH` of "python" reuses the
   seeded row instead of coining a second).
 
+- **Date**: 2026-08-24
+- **Decision**: For deterministic resume skill extraction (Prompt 2.4):
+  compile the curated taxonomy's canonical names and aliases into
+  boundary-guarded, separator-tolerant regexes and match them against
+  the raw `resumes.extracted_text`; persist one `skill_evidence` row per
+  matched skill with a quoted excerpt and a fixed confidence. Add
+  `candidate_skills.status` (suggested/confirmed/rejected) as the user's
+  review decision, where **"rejected" is a persistent tombstone** and the
+  extractor **never writes that column at all**. Manual add resolves
+  ONLY against the curated taxonomy (`skills.category IS NOT NULL`, or a
+  known alias) and never coins a `skills` row.
+- **Problem**: Turn stored resume text into evidence-backed skills with
+  no model inference, without false positives from ordinary English, and
+  — the hard part — in a way where re-running extraction can never undo
+  a decision the user already made.
+- **Alternatives**: (1) Deleting a candidate skill on rejection —
+  rejected outright: extraction reruns, so the next run would faithfully
+  recreate the row and the rejection would silently evaporate. The
+  tombstone is the whole point. (2) A `DELETE` endpoint alongside
+  reject — same failure mode, so there deliberately is none; rejection
+  IS the removal mechanism. (3) An `is_manual` column — unnecessary,
+  since the presence of a `manual` evidence row already answers it.
+  (4) Letting manual add coin new skills the way Prompt 1.3's target
+  skills do — rejected: a candidate skill is a scored, evidence-backed
+  claim feeding Prompt 4.x, so founding one on a typo ("Pyton") or a
+  duplicate ("ReactJS" beside React) would corrupt matching, and a
+  self-coined skill has no aliases so the extractor could never match it
+  anyway. (5) Case-sensitivity as the false-positive guard — rejected:
+  resumes write "PYTHON"/"python" interchangeably, so case carries no
+  signal and would cause false negatives.
+- **Trade-off**: Ambiguous terms — taxonomy entries that are also
+  ordinary English words — match ONLY in "list context" (delimiter on
+  both sides), so "Languages: Python, Go" matches but "I go to the
+  office" does not. That costs real recall: "I built services in Go"
+  is missed. Accepted, because the product rule is that a skill must
+  never be invented and the user can always add one by hand. The
+  ambiguous set is currently just {go, express}; React/Jest/Agile were
+  considered and excluded because in resume prose their skill sense
+  dominates. It lives as a constant in app/skill_matching.py rather than
+  a taxonomy column — a matching-strategy concern, not a vocabulary
+  fact — with the understanding that past ~10 entries it should move
+  into the taxonomy. Separately, a term's parts may be joined by
+  whitespace OR punctuation but never punctuation-then-whitespace: a
+  test caught that "unit. Testing" would otherwise match "Unit Testing"
+  across a sentence boundary. The skills UI fetches on mount with an
+  explicit Refresh rather than auto-updating when the worker finishes,
+  which would have required coupling it to Prompt 2.2's ResumeSection.
+- **Outcome**: `app/skill_matching.py` (pure, no I/O — all matching
+  rules testable without fixtures) and `app/skill_extraction.py`
+  (persistence, idempotency, reconciliation), called best-effort from
+  the existing Celery worker after text extraction succeeds so a skill
+  failure never flips a resume back to "failed". Migration
+  `90da84c6fbb1`. Confidence is a fixed lookup: canonical 0.90, alias
+  0.75, ambiguous-in-list-context 0.60, manual 1.00. Reruns are exact
+  no-ops (verified live: a second and third run reported zero writes of
+  any kind), guaranteed by ON CONFLICT DO NOTHING on candidate skills
+  plus an evidence upsert whose WHERE clause suppresses unchanged
+  writes; reconciliation only ever deletes UNREVIEWED suggestions with
+  no evidence left. Endpoints `GET`/`POST /api/v1/candidate-skills` and
+  `PATCH /{id}` (no DELETE). Covered by `tests/test_skill_matching.py`
+  (53), `tests/test_skill_extraction.py` (15),
+  `tests/test_candidate_skill_api.py` (23) and
+  `skills-section.test.tsx` (10) — including a regression test that a
+  "Rust" coined as a Prompt 1.3 target skill still returns 422 here.
+
 <!-- Add new entries above this line, most recent first. -->
