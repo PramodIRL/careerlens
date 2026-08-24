@@ -151,6 +151,21 @@ class SkillEvidenceResponse(BaseModel):
     excerpt: str | None
     extraction_method: ExtractionMethod
     confidence: float
+    # A human-readable name for whatever `source_identifier` points at
+    # (Prompt 3.4). Additive: existing clients that ignore it are
+    # unaffected.
+    #
+    #   resume  -> the resume's own `original_filename`
+    #   github  -> "owner/repo", which source_identifier already is
+    #   manual  -> None; a self-assertion has no external source to name
+    #
+    # Null ALSO when the referenced row no longer resolves — a resume
+    # deleted after its evidence was written. `source_identifier` is a
+    # polymorphic string with no foreign key (see
+    # app/models/skill_evidence.py), so a dangling reference is an
+    # expected state, not an error: the evidence stays as the historical
+    # record it is, simply without a display name.
+    source_label: str | None = None
     created_at: datetime
 
 
@@ -196,3 +211,102 @@ class CandidateSkillUpdateRequest(BaseModel):
     """Confirm or reject a candidate skill."""
 
     status: CandidateSkillDecision
+
+
+# --------------------------------------------------------------------
+# Unified skill profile (Prompt 3.4)
+#
+# READ-ONLY PRESENTATION MODELS. Nothing below is persisted, and nothing
+# below introduces a score. See app/api/v1/skill_profile.py.
+# --------------------------------------------------------------------
+
+
+class SkillProfileSummary(BaseModel):
+    """Account-level rollup of the candidate's evidenced skills.
+
+    EVERY FIELD IS A COUNT OR A BOOLEAN — a fact derived by counting
+    stored rows, never a computed rating. Prompt 4.x owns scoring.
+
+    `by_source` COUNTS DISTINCT SKILLS, NOT EVIDENCE ROWS, and the
+    difference is the whole point: one repository naming Python in its
+    README, description, topic and language writes four evidence rows
+    (Prompt 3.3's four extraction methods) but supports exactly one
+    skill. Counting rows would make GitHub look four times more
+    informative than it is, purely as an artefact of how 3.3 decomposes
+    signals.
+
+    Its keys are EvidenceSourceType values. A source contributing
+    nothing is present with a count of 0 rather than absent, so a client
+    never has to distinguish "no evidence" from "key missing".
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # confirmed + suggested. Excludes rejected, matching `skills` below.
+    total: int
+    confirmed: int
+    suggested: int
+    # Counted but NOT listed in `skills` — see SkillProfileResponse.
+    rejected: int
+    by_source: dict[EvidenceSourceType, int] = Field(default_factory=dict)
+    # Skills backed by more than one DISTINCT source type. The most
+    # useful single signal this endpoint produces: a skill both a resume
+    # and a repository attest to is corroborated in a way neither alone
+    # is. Reported as a count, deliberately not turned into a weighting.
+    multi_source: int
+    # True when nothing is left awaiting review (suggested == 0).
+    reviewed: bool
+
+
+class SkillProfileEntry(BaseModel):
+    """One evidenced skill, with its provenance rolled up.
+
+    `strongest_evidence_confidence` IS NOT A SKILL SCORE, and the name is
+    deliberately long to make that hard to misread. It is `max()` over
+    the confidences already stored on this skill's evidence — a
+    SELECTION of one existing value, not a computation over several.
+
+    There is deliberately no blending, averaging, or source weighting.
+    Prompt 2.4 defined `confidence` as a match-quality lookup answering
+    "does this string denote this skill", NOT "how strong is this as
+    evidence of ability" (see docs/decisions.md). Combining those numbers
+    would invent the ranking model Prompt 4.x owns — and 4.x already has
+    `source_type` and `extraction_method` on every evidence row to weight
+    by, so nothing is lost by leaving it alone here.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    skill_id: UUID
+    skill_name: str
+    skill_category: SkillCategory | None
+    status: CandidateSkillStatus
+    # Distinct source types backing this skill, sorted for stable output.
+    sources: list[EvidenceSourceType] = Field(default_factory=list)
+    # How many evidence rows support it — the per-skill figure the
+    # summary's `by_source` deliberately does not report.
+    evidence_count: int
+    strongest_evidence_confidence: float
+    evidence: list[SkillEvidenceResponse] = Field(default_factory=list)
+
+
+class SkillProfileResponse(BaseModel):
+    """The candidate's unified, evidence-backed skill profile.
+
+    REJECTED SKILLS ARE COUNTED IN `summary` BUT ABSENT FROM `skills`.
+    A rejection is a persistent tombstone meaning "this is not mine"
+    (app/schemas/skill.py's CandidateSkillStatus), so listing one inside
+    a *profile* would contradict the decision the user made. Counting it
+    keeps the tombstone visible rather than silently dropping data, and
+    the review surface (GET /api/v1/candidate-skills) still returns all
+    three states unchanged.
+
+    `skills` is ordered by skill name, and evidence within each skill by
+    (created_at, id), so two identical requests return identical JSON.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    summary: SkillProfileSummary
+    skills: list[SkillProfileEntry] = Field(default_factory=list)

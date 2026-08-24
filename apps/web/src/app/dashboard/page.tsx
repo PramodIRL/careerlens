@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth-context";
 import GitHubSection from "./github-section";
 import ProfileForm from "./profile-form";
 import ResumeSection from "./resume-section";
+import SkillProfileSection from "./skill-profile-section";
 import SkillsSection from "./skills-section";
 
 export default function DashboardPage() {
@@ -88,6 +89,13 @@ export default function DashboardPage() {
           Your GitHub
         </h2>
         <GitHubSection accessToken={accessToken} />
+      </div>
+
+      <div className="w-full max-w-sm">
+        <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+          Your skill profile
+        </h2>
+        <SkillProfileSection accessToken={accessToken} />
       </div>
 
       <div className="w-full max-w-sm">
