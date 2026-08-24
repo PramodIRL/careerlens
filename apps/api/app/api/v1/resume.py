@@ -32,6 +32,7 @@ from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.resume import ResumeResponse, ResumeStatus
 from app.settings import get_settings
+from app.skill_extraction import remove_resume_skill_evidence
 from app.storage import ResumeStorage, get_resume_storage
 from app.worker import enqueue_extraction
 
@@ -205,6 +206,24 @@ async def delete_resume(
 ) -> None:
     resume = await _get_owned_resume(db, resume_id, current_user)
     storage_key = resume.storage_key
+
+    # Skills derived from this resume go with it. `skill_evidence`
+    # cites a resume by a polymorphic string, not a foreign key (no
+    # single FK can span resume/github/manual), so no cascade fires and
+    # this has to be explicit — without it the unified profile (Prompt
+    # 3.4) kept citing a document the user had just deleted.
+    #
+    # Deliberately narrow: only THIS resume's evidence, and then only
+    # candidate skills left unreviewed with no evidence from any source.
+    # GitHub evidence, manual evidence, another resume's evidence, and
+    # every confirmed or rejected decision are untouched — see
+    # app/skill_extraction.py.
+    #
+    # Same transaction as the row delete below, sharing the one commit:
+    # a resume that vanished while its evidence survived is exactly the
+    # inconsistency this is fixing, so the two must not be able to
+    # diverge.
+    await remove_resume_skill_evidence(db, current_user.id, resume_id)
 
     # Delete the database row before the stored file, for the same
     # reason upload writes the file before the row: whichever side

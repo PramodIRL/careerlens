@@ -30,7 +30,12 @@ const GROUPS: {
   {
     status: "suggested",
     heading: "Needs review",
-    hint: "Found in your resume. Confirm the ones you actually have.",
+    // Source-neutral on purpose. Suggestions now come from resumes AND
+    // GitHub repositories, so naming only the resume was wrong for
+    // GitHub-derived skills. It also has to stay clear that a SOURCE
+    // never confirms anything — evidence is found automatically, and
+    // confirming is the user's decision alone.
+    hint: "Found in your resume and GitHub projects. Confirm the ones you actually have.",
   },
   { status: "confirmed", heading: "Confirmed", hint: "" },
   { status: "rejected", heading: "Rejected", hint: "" },
@@ -180,7 +185,8 @@ export default function SkillsSection({ accessToken }: SkillsSectionProps) {
 
       {skills.length === 0 ? (
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          No skills yet. Upload a resume, or add one above.
+          No skills yet. Upload a resume, import your GitHub repositories, or
+          add one above.
         </p>
       ) : (
         GROUPS.map(({ status, heading, hint }) => {

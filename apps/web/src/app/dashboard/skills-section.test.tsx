@@ -246,3 +246,102 @@ describe("skills section", () => {
     expect(screen.getByText(/100% confidence/)).toBeInTheDocument();
   });
 });
+
+describe("evidence wording", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addCandidateSkillMock.mockReset();
+    updateCandidateSkillStatusMock.mockReset();
+  });
+
+  function githubSkill() {
+    return candidateSkill({
+      status: "suggested" as const,
+      evidence: [
+        {
+          id: "ev-gh",
+          source_type: "github" as const,
+          source_identifier: "ada/scheduler",
+          excerpt: "docker",
+          extraction_method: "github_topic_match",
+          confidence: 0.75,
+          source_label: "ada/scheduler",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+  }
+
+  it("names the repository a GitHub skill came from", async () => {
+    listCandidateSkillsMock.mockResolvedValue([githubSkill()]);
+    render(<SkillsSection accessToken={ACCESS_TOKEN} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/From GitHub/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/ada\/scheduler/)).toBeInTheDocument();
+  });
+
+  it("never implies GitHub confirmed the skill", async () => {
+    // A SOURCE supplies evidence; only the user confirms. The skill
+    // below is still "suggested", so nothing on screen may suggest
+    // GitHub already settled it.
+    listCandidateSkillsMock.mockResolvedValue([githubSkill()]);
+    render(<SkillsSection accessToken={ACCESS_TOKEN} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/From GitHub/)).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(
+        /GitHub confirmed|confirmed by GitHub|verified by GitHub/i,
+      ),
+    ).not.toBeInTheDocument();
+    // It sits under "Needs review" with a Confirm button still to press.
+    expect(screen.getByText(/Needs review/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeInTheDocument();
+  });
+
+  it("does not claim a GitHub-derived suggestion came from the resume", async () => {
+    // The old hint read "Found in your resume." for every suggestion,
+    // which was simply wrong once GitHub started producing them.
+    listCandidateSkillsMock.mockResolvedValue([githubSkill()]);
+    render(<SkillsSection accessToken={ACCESS_TOKEN} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Needs review/)).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/^Found in your resume\.\s/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Found in your resume and GitHub projects/),
+    ).toBeInTheDocument();
+  });
+
+  it("labels manual evidence as the user's own, with no source name", async () => {
+    listCandidateSkillsMock.mockResolvedValue([
+      candidateSkill({
+        status: "confirmed" as const,
+        evidence: [
+          {
+            id: "ev-manual",
+            source_type: "manual" as const,
+            source_identifier: "user-1",
+            excerpt: null,
+            extraction_method: "manual_entry",
+            confidence: 1,
+            source_label: null,
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      }),
+    ]);
+    render(<SkillsSection accessToken={ACCESS_TOKEN} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Added by you/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/user-1/)).not.toBeInTheDocument();
+  });
+});
