@@ -167,6 +167,62 @@ async def delete_orphaned_suggestions(db: AsyncSession, user_id: uuid.UUID) -> i
     return len(orphaned)
 
 
+async def remove_resume_skill_evidence(
+    db: AsyncSession, user_id: uuid.UUID, resume_id: uuid.UUID
+) -> tuple[int, int]:
+    """Drop the skill evidence a now-deleted resume produced, then clean
+    up anything it stranded. Returns (evidence removed, suggestions
+    removed). Does NOT commit — the caller owns the transaction.
+
+    Called from app/api/v1/resume.py's DELETE. It has to be explicit
+    because `skill_evidence.source_identifier` is a polymorphic string,
+    not a foreign key (no single FK can span resume/github/manual), so
+    no database cascade fires when a resume row goes. Before this
+    existed, deleting a resume left its evidence behind and the unified
+    profile (Prompt 3.4) went on citing a document that no longer
+    exists.
+
+    WHY THIS IS A DELETE AND NOT A TOMBSTONE. Rejection is a tombstone
+    because extraction re-runs and would otherwise recreate the row
+    (app/schemas/skill.py). Nothing ever re-creates evidence for a
+    deleted resume — the resume is gone, so the extractor can never run
+    over it again — which is the same reasoning that makes disconnecting
+    GitHub a purge rather than a flag (docs/decisions.md).
+
+    NOT scoped by extraction_method, unlike `_reconcile` below. That one
+    reconciles a resume that still exists, so it must confine itself to
+    the rows this extractor owns; here the source document itself is
+    gone, so every piece of evidence citing it is stale regardless of
+    which method produced it.
+
+    Scoped two ways so it can never reach another user's rows: the
+    source identifier must be this resume, AND the evidence must hang
+    off a candidate skill owned by `user_id`. The route already proves
+    ownership before calling this, so the second filter is defence in
+    depth — the same fail-closed reasoning as
+    app/skill_provenance.py's user-scoped label lookup.
+    """
+    removed = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            delete(SkillEvidence).where(
+                SkillEvidence.source_type == EvidenceSourceType.RESUME.value,
+                SkillEvidence.source_identifier == str(resume_id),
+                SkillEvidence.candidate_skill_id.in_(
+                    select(CandidateSkill.id).where(CandidateSkill.user_id == user_id)
+                ),
+            )
+        ),
+    )
+    # The existing shared helper already encodes every status rule this
+    # needs: it removes ONLY "suggested" rows with zero evidence from
+    # ANY source, so confirmed survives, rejected stays a tombstone, and
+    # a skill still backed by GitHub, a manual entry, or another resume
+    # is untouched. Reused rather than reimplemented.
+    orphaned = await delete_orphaned_suggestions(db, user_id)
+    return removed.rowcount or 0, orphaned
+
+
 async def _write_evidence(
     db: AsyncSession,
     candidate_skill: CandidateSkill,
