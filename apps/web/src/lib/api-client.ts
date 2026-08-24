@@ -3,6 +3,7 @@ const AUTH_BASE = `${API_BASE}/api/v1/auth`;
 const PROFILE_BASE = `${API_BASE}/api/v1/profiles`;
 const RESUME_BASE = `${API_BASE}/api/v1/resumes`;
 const CANDIDATE_SKILL_BASE = `${API_BASE}/api/v1/candidate-skills`;
+const SKILL_PROFILE_BASE = `${API_BASE}/api/v1/skill-profile`;
 const GITHUB_CONNECTION_BASE = `${API_BASE}/api/v1/github-connection`;
 
 export interface AccessTokenResponse {
@@ -306,6 +307,11 @@ export interface SkillEvidenceResponse {
   extraction_method: string;
   /** 0..1. Stored exactly server-side; exposed as a number here. */
   confidence: number;
+  /** A human-readable name for whatever `source_identifier` points at:
+   * a resume's filename, or "owner/repo" for GitHub. Null for a manual
+   * assertion (no external source to name) and for a source that no
+   * longer resolves, such as a deleted resume. */
+  source_label: string | null;
   created_at: string;
 }
 
@@ -570,4 +576,64 @@ export async function listGitHubRepositories(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as GitHubRepositoryResponse[];
+}
+
+// --- Unified skill profile (Prompt 3.4) ------------------------------
+
+/** Account-level rollup of the candidate's evidenced skills.
+ *
+ * Every field is a count or a boolean — a fact derived from stored rows,
+ * never a computed rating. Scoring belongs to a later slice. */
+export interface SkillProfileSummary {
+  /** confirmed + suggested. Excludes rejected. */
+  total: number;
+  confirmed: number;
+  suggested: number;
+  /** Counted here but deliberately absent from `skills`: a rejection is
+   * a tombstone meaning "this is not mine". */
+  rejected: number;
+  /** Counts distinct SKILLS per source, not evidence rows — one
+   * repository can write four evidence rows for a single skill. */
+  by_source: Record<EvidenceSourceType, number>;
+  /** Skills backed by more than one distinct source type. */
+  multi_source: number;
+  /** True when nothing is left awaiting review. */
+  reviewed: boolean;
+}
+
+export interface SkillProfileEntry {
+  id: string;
+  skill_id: string;
+  skill_name: string;
+  skill_category: string | null;
+  status: CandidateSkillStatus;
+  /** Distinct source types backing this skill, sorted. */
+  sources: EvidenceSourceType[];
+  evidence_count: number;
+  /** max() over this skill's stored evidence confidences — a selection
+   * of one existing value, NOT a blended skill score. */
+  strongest_evidence_confidence: number;
+  evidence: SkillEvidenceResponse[];
+}
+
+export interface SkillProfileResponse {
+  summary: SkillProfileSummary;
+  /** Confirmed and suggested skills only; see `summary.rejected`. */
+  skills: SkillProfileEntry[];
+}
+
+/** The caller's unified skill profile — read-only, derived on request
+ * from the same candidate-skill and evidence rows the review endpoint
+ * mutates. The API only ever returns the caller's own. */
+export async function getSkillProfile(
+  accessToken: string,
+): Promise<SkillProfileResponse> {
+  const response = await fetch(SKILL_PROFILE_BASE, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as SkillProfileResponse;
 }

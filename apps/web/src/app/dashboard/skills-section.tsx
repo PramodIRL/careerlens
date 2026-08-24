@@ -251,8 +251,15 @@ export default function SkillsSection({ accessToken }: SkillsSectionProps) {
                           <span className="font-medium">
                             {SOURCE_LABELS[item.source_type] ??
                               item.source_type}
-                          </span>{" "}
-                          · {confidenceLabel(item.confidence)}
+                          </span>
+                          {/* Naming the actual repository or resume file,
+                              not just the source category — twenty repos
+                              all reading "From GitHub" told a candidate
+                              nothing about which project shows the
+                              skill. Null for a manual assertion, and for
+                              a source that no longer resolves. */}
+                          {item.source_label && <> · {item.source_label}</>} ·{" "}
+                          {confidenceLabel(item.confidence)}
                           {item.excerpt && (
                             <blockquote className="mt-1 border-l-2 border-zinc-300 pl-2 italic dark:border-zinc-700">
                               {item.excerpt}

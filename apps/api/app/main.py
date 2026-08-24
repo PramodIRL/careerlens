@@ -10,6 +10,7 @@ from app.api.v1.github_ingestion import router as github_ingestion_router
 from app.api.v1.health import router as health_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.resume import router as resume_router
+from app.api.v1.skill_profile import router as skill_profile_router
 
 
 def _allowed_origins() -> list[str]:
@@ -51,6 +52,11 @@ app.include_router(auth_router, prefix="/api/v1/auth")
 app.include_router(profile_router, prefix="/api/v1/profiles")
 app.include_router(resume_router, prefix="/api/v1/resumes")
 app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
+# Prompt 3.4 — the READ-ONLY presentation view over the same two tables
+# the candidate-skill routes above mutate. A separate prefix, not an
+# extension of /candidate-skills, so the mutation contract those routes
+# (and their tests) pin stays untouched.
+app.include_router(skill_profile_router, prefix="/api/v1/skill-profile")
 app.include_router(github_connection_router, prefix="/api/v1/github-connection")
 # Prompt 3.2 — mounted under the same prefix: an import belongs to a
 # connection, and there is no ingestion without one.

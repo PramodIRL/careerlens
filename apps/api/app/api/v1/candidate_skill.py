@@ -67,6 +67,7 @@ from app.schemas.skill import (
     SkillCategory,
     SkillEvidenceResponse,
 )
+from app.skill_provenance import label_for, load_resume_labels
 
 router = APIRouter()
 
@@ -133,8 +134,14 @@ async def _load_evidence(
 
 
 def _to_response(
-    candidate_skill: CandidateSkill, skill: Skill, evidence: list[SkillEvidence]
+    candidate_skill: CandidateSkill,
+    skill: Skill,
+    evidence: list[SkillEvidence],
+    resume_labels: dict[str, str],
 ) -> CandidateSkillResponse:
+    """`resume_labels` resolves a resume's UUID `source_identifier` to its
+    filename (Prompt 3.4). Passed in rather than looked up per row so the
+    list endpoint stays one query, not one per skill."""
     return CandidateSkillResponse(
         id=candidate_skill.id,
         skill_id=skill.id,
@@ -149,6 +156,7 @@ def _to_response(
                 excerpt=row.excerpt,
                 extraction_method=ExtractionMethod(row.extraction_method),
                 confidence=float(row.confidence),
+                source_label=label_for(row.source_type, row.source_identifier, resume_labels),
                 created_at=row.created_at,
             )
             for row in evidence
@@ -183,8 +191,9 @@ async def list_candidate_skills(
         )
     ).all()
     evidence = await _load_evidence(db, [candidate_skill.id for candidate_skill, _ in rows])
+    resume_labels = await load_resume_labels(db, current_user.id)
     return [
-        _to_response(candidate_skill, skill, evidence.get(candidate_skill.id, []))
+        _to_response(candidate_skill, skill, evidence.get(candidate_skill.id, []), resume_labels)
         for candidate_skill, skill in rows
     ]
 
@@ -245,7 +254,8 @@ async def add_candidate_skill(
     await db.refresh(candidate_skill)
 
     evidence = await _load_evidence(db, [candidate_skill.id])
-    return _to_response(candidate_skill, skill, evidence.get(candidate_skill.id, []))
+    resume_labels = await load_resume_labels(db, current_user.id)
+    return _to_response(candidate_skill, skill, evidence.get(candidate_skill.id, []), resume_labels)
 
 
 @router.patch("/{candidate_skill_id}", response_model=CandidateSkillResponse)
@@ -263,4 +273,5 @@ async def update_candidate_skill(
     skill = await db.get(Skill, candidate_skill.skill_id)
     assert skill is not None  # FK guarantees it
     evidence = await _load_evidence(db, [candidate_skill.id])
-    return _to_response(candidate_skill, skill, evidence.get(candidate_skill.id, []))
+    resume_labels = await load_resume_labels(db, current_user.id)
+    return _to_response(candidate_skill, skill, evidence.get(candidate_skill.id, []), resume_labels)

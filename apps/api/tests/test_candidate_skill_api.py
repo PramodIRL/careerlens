@@ -12,6 +12,7 @@ below.
 import asyncio
 import uuid
 from collections.abc import Generator
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +24,7 @@ from app.db import get_db
 from app.main import app
 from app.models.candidate_skill import CandidateSkill
 from app.models.skill import Skill
+from app.models.skill_evidence import SkillEvidence
 from app.rate_limit import _request_log
 from app.schemas.skill import CandidateSkillStatus, EvidenceSourceType, ExtractionMethod
 from app.settings import get_settings
@@ -345,3 +347,53 @@ def test_two_users_may_hold_the_same_skill_independently(client: TestClient) -> 
     _patch(client, alice_token, alices["id"], "rejected")
 
     assert _list(client, bob_token).json()[0]["status"] == CandidateSkillStatus.CONFIRMED.value
+
+
+# --- provenance labels on the review endpoint (Prompt 3.4) ------------
+
+
+def test_manual_evidence_exposes_a_null_source_label(client: TestClient) -> None:
+    """`source_label` is ADDITIVE — the review endpoint's existing
+    contract is unchanged, it simply now names what each piece of
+    evidence cites. A manual assertion has no external source to name."""
+    _seed_taxonomy()
+    token, _ = _register_and_login(client, "alice@example.com")
+    _add(client, token, "Python")
+
+    evidence = _list(client, token).json()[0]["evidence"][0]
+
+    assert "source_label" in evidence
+    assert evidence["source_label"] is None
+
+
+def test_github_evidence_is_labelled_with_the_repository(client: TestClient) -> None:
+    """Closes the Prompt 3.3 gap where twenty repositories all rendered
+    as the same four words, "From GitHub"."""
+    _seed_taxonomy()
+    token, user_id = _register_and_login(client, "alice@example.com")
+
+    async def _write(session) -> None:  # type: ignore[no-untyped-def]
+        skill = await session.scalar(select(Skill).where(Skill.slug == "docker"))
+        assert skill is not None
+        candidate_skill = CandidateSkill(
+            user_id=uuid.UUID(user_id), skill_id=skill.id, status="suggested"
+        )
+        session.add(candidate_skill)
+        await session.flush()
+        session.add(
+            SkillEvidence(
+                candidate_skill_id=candidate_skill.id,
+                source_type=EvidenceSourceType.GITHUB.value,
+                source_identifier="ada/scheduler",
+                excerpt="docker",
+                extraction_method=ExtractionMethod.GITHUB_TOPIC_MATCH.value,
+                confidence=Decimal("0.75"),
+            )
+        )
+        await session.commit()
+
+    _run(_write)
+
+    evidence = _list(client, token).json()[0]["evidence"][0]
+
+    assert evidence["source_label"] == "ada/scheduler"
