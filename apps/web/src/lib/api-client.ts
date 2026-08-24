@@ -3,6 +3,7 @@ const AUTH_BASE = `${API_BASE}/api/v1/auth`;
 const PROFILE_BASE = `${API_BASE}/api/v1/profiles`;
 const RESUME_BASE = `${API_BASE}/api/v1/resumes`;
 const CANDIDATE_SKILL_BASE = `${API_BASE}/api/v1/candidate-skills`;
+const GITHUB_CONNECTION_BASE = `${API_BASE}/api/v1/github-connection`;
 
 export interface AccessTokenResponse {
   access_token: string;
@@ -376,4 +377,82 @@ export async function updateCandidateSkillStatus(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as CandidateSkillResponse;
+}
+
+/** A connected PUBLIC GitHub account (Prompt 3.1).
+ *
+ * Only public, non-sensitive facts: which account, how many public
+ * repositories it had when it was last checked, and when that was.
+ * There is no token, email, or private data here because none is stored
+ * server-side — CareerLens never asks for a GitHub password and never
+ * requests private access. See apps/api/app/models/github_connection.py. */
+export interface GitHubConnectionResponse {
+  user_id: string;
+  /** GitHub's canonical spelling of the login, not what the user typed. */
+  username: string;
+  /** GitHub's immutable numeric account id. Kept because a username can
+   * be renamed and later reused by someone else. */
+  github_user_id: number;
+  /** A snapshot taken at `last_verified_at`, not a live count — always
+   * present it alongside that timestamp. */
+  public_repo_count: number;
+  last_verified_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The caller's own connection, or null when they haven't connected one.
+ * "Not connected" is a normal state rather than an error, so this
+ * resolves to null instead of throwing. */
+export async function getGitHubConnection(
+  accessToken: string,
+): Promise<GitHubConnectionResponse | null> {
+  const response = await fetch(GITHUB_CONNECTION_BASE, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as GitHubConnectionResponse | null;
+}
+
+/** Verify a public GitHub username and connect it, replacing any
+ * existing connection (the server keys one connection per user).
+ *
+ * Sends the username and nothing else — the API rejects any extra field,
+ * which is how "we never ask for a password or token" is enforced rather
+ * than merely promised. Failures arrive as ApiError with the API's own
+ * message: 404 no such public account, 422 unusable username or an
+ * organization, 503 GitHub unavailable or rate-limited, 504 timeout. */
+export async function connectGitHub(
+  accessToken: string,
+  username: string,
+): Promise<GitHubConnectionResponse> {
+  const response = await fetch(GITHUB_CONNECTION_BASE, {
+    method: "PUT",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ username }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as GitHubConnectionResponse;
+}
+
+/** Remove the caller's connection. Idempotent — succeeds whether or not
+ * one existed. */
+export async function disconnectGitHub(accessToken: string): Promise<void> {
+  const response = await fetch(GITHUB_CONNECTION_BASE, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
 }

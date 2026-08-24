@@ -120,6 +120,46 @@ generated document cannot be committed.
 `docs/demo.md` is the full walkthrough: what to click, what to point out,
 and what the system deliberately refuses to infer.
 
+## GitHub connection
+
+A candidate can connect a **public** GitHub username, under
+`/api/v1/github-connection`:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET` | The caller's connection, or `null`. "Not connected" is a normal state, not a 404. |
+| `PUT` | Verify a public username against GitHub and store it. `201` when newly connected, `200` when it replaced an existing connection. |
+| `DELETE` | Disconnect. Idempotent — `204` whether or not there was a connection. |
+
+**No credential is involved anywhere in this flow.** CareerLens never
+asks for a GitHub password, never issues or stores an OAuth token or
+personal access token, and never requests access to a private
+repository. The API reads one unauthenticated public endpoint
+(`GET /users/{username}`) and stores four facts: GitHub's numeric
+account id, the canonical username, the public repository count, and
+when it was last verified. The request body accepts `username` and
+nothing else — a request carrying any extra field is rejected with a
+422 rather than having it quietly ignored.
+
+The numeric id is stored because a GitHub username can be renamed and
+later reused by someone else; keying later ingestion on the string alone
+would eventually point at a stranger's repositories. There is
+deliberately **no** unique constraint on that id across users: this flow
+verifies that an account exists, never that the caller owns it, so a
+global unique would let whoever connects a username first lock out its
+real owner. See `docs/decisions.md`.
+
+Upstream failures each map to one status and one message a user can act
+on: `404` no such public account, `422` unusable username or an
+organization account, `503` GitHub unavailable or rate-limited (with
+`Retry-After` when GitHub said when its window resets), `504` timeout.
+No upstream status code, response body or exception text is ever
+surfaced.
+
+Repository ingestion, GitHub-derived skills and evidence are **not**
+part of this — see the connection as the prerequisite for that work,
+not the start of it.
+
 ## Authentication
 
 Email/password auth, under `/api/v1/auth`:

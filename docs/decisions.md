@@ -780,4 +780,96 @@ Add one entry per decision, most recent first.
   never mentions, which is the one failure the Evidence-First rule
   exists to prevent.
 
+- **Date**: 2026-08-24
+- **Decision**: Store a connected GitHub account with **no unique
+  constraint on `github_user_id` or `username`** across users, and key
+  the 1:1 relationship on `user_id` alone.
+- **Problem**: Prompt 3.1 connects a *public* GitHub username. The
+  obvious hygiene move is a global unique on the account id — one GitHub
+  account, one CareerLens user.
+- **Alternatives**: (1) `UNIQUE(github_user_id)`; (2)
+  `UNIQUE(username)`; (3) a soft "claimed" flag with a dispute process.
+- **Trade-off**: A unique constraint enforces an ownership claim that
+  this prompt never verifies. There is no OAuth here — the API reads a
+  public page and learns only that an account *exists*, not that the
+  caller controls it. So a global unique would let whoever types
+  `torvalds` first permanently prevent its real owner from connecting
+  their own account: a denial-of-service wearing data-integrity clothes,
+  and one with no recovery path short of manual database surgery. The
+  cost of omitting it is that two users may reference the same public
+  account, which is harmless — nothing about *reading public data*
+  conflicts, and no scoring in Prompt 4.x is zero-sum between users.
+  Revisit if OAuth ever makes ownership provable.
+- **Outcome**: `github_connections` with `user_id` as both primary key
+  and foreign key (the `profiles` shape). One connection per user is
+  therefore a property of the schema, not of the handler remembering to
+  delete first — pinned by a regression test that connects account A,
+  connects account B, and asserts exactly one row survives with B's
+  data. Disconnect is a hard DELETE rather than 2.4's tombstone, because
+  nothing re-creates a connection automatically, so there is nothing for
+  a tombstone to suppress. `github_user_id` (BigInteger) is stored
+  alongside the username because GitHub usernames can be renamed and
+  later recycled — ingestion in Prompt 3.2 keying on the string alone
+  would silently start reading a stranger's repositories. Migration
+  `a013618c2ddf`.
+
+- **Date**: 2026-08-24
+- **Decision**: Test the GitHub client at **two** levels — a fake client
+  for the routes, and `httpx.MockTransport` for the client itself —
+  rather than only swapping in a fake.
+- **Problem**: The route needs to map every upstream failure to a status
+  and a message, and the client needs to *produce* those failures from
+  real HTTP conditions. A single fake satisfies the first and silently
+  skips the second.
+- **Alternatives**: (1) fake client only; (2) `respx` or a similar
+  HTTP-mocking library; (3) an integration test hitting real GitHub.
+- **Trade-off**: Two levels means two test files and a little
+  duplication of scenario names. Worth it: with a fake alone, the
+  timeout handling, the `X-RateLimit-Remaining` check and the payload
+  validation never execute at all — the tests would assert that a canned
+  `GitHubTimeout` becomes a 504, proving the route and nothing else.
+  `respx` was rejected as an unnecessary dependency: `httpx.MockTransport`
+  ships with httpx and does the same job. Hitting real GitHub was
+  rejected outright — it makes CI depend on a third party, on network
+  access, and on a 60-request/hour unauthenticated budget shared by
+  every runner on the same egress IP.
+- **Outcome**: `tests/test_github_client.py` drives the real client
+  through a mock transport for the valid profile, 404, read and connect
+  timeouts, 403-with-remaining-0, 429, an unparseable reset header, a
+  plain 403 (which must NOT be reported as a rate limit), eight
+  malformed payloads, a non-JSON body, 5xx and a connection error — plus
+  an assertion that the outgoing request carries **no Authorization
+  header**, which is the one regression that would otherwise make
+  everything work better rather than worse. `httpx` moved from the dev
+  group to a runtime dependency; it was already in the lock file via
+  Starlette's TestClient, so the change added zero new packages
+  (verified: `uv sync` resolved 65 and installed none).
+
+- **Date**: 2026-08-24
+- **Decision**: Reject unknown fields on the connect request
+  (`extra="forbid"`), accepting that FastAPI's 422 body echoes the
+  rejected value back to the sender.
+- **Problem**: The product promise is "we never ask for your GitHub
+  password". A client that sends one anyway should be told, not silently
+  accommodated — but Pydantic's `extra_forbidden` error includes an
+  `input` key containing the offending value.
+- **Alternatives**: (1) `extra="ignore"` — drop unknown fields silently,
+  echoing nothing; (2) an app-wide `RequestValidationError` handler that
+  strips `input` from every 422.
+- **Trade-off**: Silently ignoring a `password` field is worse
+  messaging: nothing tells the caller they sent something the product
+  does not want. The echo is reflected only to the client that supplied
+  the value — it is never stored, never logged server-side, and never
+  sent to GitHub — but it would reach a browser-side error reporter that
+  captures response bodies. The app-wide scrubber is the right fix and
+  is a strict improvement (no endpoint should echo submitted values),
+  but it changes the 422 body of every existing endpoint, which is
+  outside a slice scoped to the GitHub connection.
+- **Outcome**: `extra="forbid"` kept. The limitation is asserted
+  explicitly in `tests/test_github_connection_api.py` so it stays
+  visible rather than being rediscovered, and the app-wide handler is
+  left as a follow-up. Verified that nothing currently depends on the
+  `input` key: no test reads it, and the web client reads only
+  `detail[0].msg`.
+
 <!-- Add new entries above this line, most recent first. -->

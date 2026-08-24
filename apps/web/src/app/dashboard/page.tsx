@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 
+import GitHubSection from "./github-section";
 import ProfileForm from "./profile-form";
 import ResumeSection from "./resume-section";
 import SkillsSection from "./skills-section";
@@ -80,6 +81,13 @@ export default function DashboardPage() {
           Your resumes
         </h2>
         <ResumeSection accessToken={accessToken} />
+      </div>
+
+      <div className="w-full max-w-sm">
+        <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+          Your GitHub
+        </h2>
+        <GitHubSection accessToken={accessToken} />
       </div>
 
       <div className="w-full max-w-sm">
