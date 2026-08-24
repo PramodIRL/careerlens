@@ -456,3 +456,118 @@ export async function disconnectGitHub(accessToken: string): Promise<void> {
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
 }
+
+/** Processing state of a GitHub import (Prompt 3.2). The same four
+ * states resume extraction uses. A run paused by GitHub rate limiting
+ * stays "processing" — it is waiting, not broken. */
+export type IngestionStatus = "queued" | "processing" | "succeeded" | "failed";
+
+/** One GitHub import run.
+ *
+ * THE THREE COUNTS ARE NOT INTERCHANGEABLE, and the UI needs all of
+ * them to tell the truth about a capped import:
+ *
+ *   repositories_available       every public repo GitHub listed, forks
+ *                                included — the honest "your account has
+ *                                N repositories" figure
+ *   repositories_forks_excluded  how many of those were forks
+ *   repositories_total           how many this run actually imported in
+ *                                full (the capped set)
+ *
+ * Reporting only the last one would tell a user with 47 repositories
+ * that they have 20. */
+export interface GitHubIngestionRunResponse {
+  id: string;
+  user_id: string;
+  status: IngestionStatus;
+  /** Null until the listing finishes — "still working out how much
+   * there is", not zero. */
+  repositories_available: number | null;
+  repositories_forks_excluded: number | null;
+  repositories_total: number | null;
+  repositories_completed: number;
+  /** Repositories whose languages/README could not be read. Their basic
+   * details are still imported, so this never means "nothing imported".
+   * Rate limiting never lands here — it pauses the run instead. */
+  repositories_failed: number;
+  /** Curated, safe text — only ever set when status is "failed". */
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GitHubRepositoryLanguageResponse {
+  language: string;
+  byte_count: number;
+}
+
+/** One imported public repository. No README text: it exists for
+ * server-side excerpt extraction, not for a list view. */
+export interface GitHubRepositoryResponse {
+  id: string;
+  github_repo_id: number;
+  name: string;
+  full_name: string;
+  description: string | null;
+  is_fork: boolean;
+  is_archived: boolean;
+  primary_language: string | null;
+  stargazers_count: number;
+  forks_count: number;
+  pushed_at: string | null;
+  languages: GitHubRepositoryLanguageResponse[];
+  topics: string[];
+  has_readme: boolean;
+  /** False means basic details only — a fork, or beyond this import's
+   * repository cap. */
+  detail_fetched: boolean;
+  updated_at: string;
+}
+
+/** Queue an import of the caller's public repositories. 409 if no
+ * account is connected, or if an import is already running. */
+export async function startGitHubIngestion(
+  accessToken: string,
+): Promise<GitHubIngestionRunResponse> {
+  const response = await fetch(`${GITHUB_CONNECTION_BASE}/ingestions`, {
+    method: "POST",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as GitHubIngestionRunResponse;
+}
+
+/** The caller's most recent import, or null if they've never run one.
+ * "Never imported" is a normal state, not an error. */
+export async function getLatestGitHubIngestion(
+  accessToken: string,
+): Promise<GitHubIngestionRunResponse | null> {
+  const response = await fetch(`${GITHUB_CONNECTION_BASE}/ingestions/latest`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as GitHubIngestionRunResponse | null;
+}
+
+/** Repositories imported for the caller. Excludes any that are no
+ * longer on GitHub. */
+export async function listGitHubRepositories(
+  accessToken: string,
+): Promise<GitHubRepositoryResponse[]> {
+  const response = await fetch(`${GITHUB_CONNECTION_BASE}/repositories`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as GitHubRepositoryResponse[];
+}

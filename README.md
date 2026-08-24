@@ -160,6 +160,57 @@ Repository ingestion, GitHub-derived skills and evidence are **not**
 part of this — see the connection as the prerequisite for that work,
 not the start of it.
 
+## GitHub ingestion
+
+Once an account is connected, a user can import their public
+repositories, under the same prefix:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/github-connection/ingestions` | Queue an import. `202` accepted; `409` if one is already running or no account is connected. |
+| `GET /api/v1/github-connection/ingestions/latest` | The most recent run and its progress, or `null`. |
+| `GET /api/v1/github-connection/repositories` | What was imported. |
+
+The Celery worker (`make start-worker` — the same one that extracts
+resume text) does the work: it refreshes the profile, walks every page
+of the public repository listing, then fetches languages and the README
+for the most recently pushed repositories.
+
+**The 60-requests-per-hour budget shapes the design.** GitHub allows 60
+unauthenticated requests per hour per IP, and each repository costs two
+of them, so an import fetches full detail for at most
+`GITHUB_MAX_REPOSITORIES` (default 20) repositories, most recently
+pushed first, skipping forks. Every listed repository still gets its
+basic details — that data is already in the listing response and costs
+nothing extra. The UI reports all three numbers separately, so an
+account with 47 public repositories is never told it has 20.
+
+Reruns are idempotent. Repositories are keyed on GitHub's **numeric
+repository id**, never on `owner/repo`, so a rename updates the existing
+row instead of creating a duplicate. Languages and topics are reconciled
+by difference, and a README whose SHA is unchanged is not rewritten.
+
+Two failure rules are worth knowing:
+
+- **Rate limiting pauses an import; it never counts as a failed
+  repository.** The run stays `processing`, everything already imported
+  stays imported, and the worker retries from GitHub's own reset time.
+- **Repositories are only marked deleted from a complete listing.** If
+  pagination stopped early, the repositories we did not see are unknown,
+  not absent — reconciling then would let one timeout erase a user's
+  history. Deletion is soft; the row is kept.
+
+**Only the README is retained as a raw source snapshot** (truncated
+text + SHA + original byte size + a truncation flag), because a later
+prompt must quote it verbatim as evidence and a hash cannot be quoted.
+Raw GitHub JSON payloads are deliberately **not** stored anywhere.
+
+Disconnecting a GitHub account deletes the imported repositories and
+runs along with the connection.
+
+Ingestion writes **no** skills and **no** evidence — that is a later
+prompt's work.
+
 ## Authentication
 
 Email/password auth, under `/api/v1/auth`:

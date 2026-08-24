@@ -33,6 +33,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.auth import get_current_user
@@ -47,6 +48,8 @@ from app.github import (
     get_github_client,
 )
 from app.models.github_connection import GitHubConnection
+from app.models.github_ingestion_run import GitHubIngestionRun
+from app.models.github_repository import GitHubRepository
 from app.models.user import User
 from app.schemas.github import GitHubConnectionResponse, GitHubConnectRequest
 
@@ -199,8 +202,28 @@ async def disconnect_github(
     nothing re-creates a connection automatically, so there is nothing
     for a tombstone to suppress, and "disconnect" should mean the stored
     GitHub identity is gone.
+
+    Prompt 3.2: that promise now has to cover the imported data too.
+    Leaving twenty repositories and their README snapshots behind after
+    a "disconnect" would quietly break the thing this endpoint claims to
+    do, so ingested repositories and ingestion runs go with the
+    connection. Languages and topics follow by ON DELETE CASCADE from
+    the repository rows.
+
+    Known consequence, deliberately not pre-empted here: once Prompt 3.3
+    writes GitHub-derived evidence, that evidence will cite repositories
+    this deletes — the same dangling polymorphic reference
+    docs/decisions.md already accepts for deleted resumes. Whether
+    disconnecting should also purge that evidence is Prompt 3.3's
+    decision to make, not this one's.
     """
     connection = await _get_connection(db, current_user.id)
-    if connection is not None:
-        await db.delete(connection)
-        await db.commit()
+    if connection is None:
+        return
+
+    await db.execute(delete(GitHubRepository).where(GitHubRepository.user_id == current_user.id))
+    await db.execute(
+        delete(GitHubIngestionRun).where(GitHubIngestionRun.user_id == current_user.id)
+    )
+    await db.delete(connection)
+    await db.commit()
