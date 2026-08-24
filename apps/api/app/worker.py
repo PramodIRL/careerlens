@@ -1,4 +1,5 @@
-"""Celery worker: asynchronous PDF/DOCX text extraction (Prompt 2.2).
+"""Celery worker: asynchronous PDF/DOCX text extraction (Prompt 2.2) and
+public GitHub ingestion (Prompt 3.2).
 
 Celery is a sync-worker framework — per docs/project-brief.md's explicit
 "Redis and Celery" architecture direction, not a free choice — layered
@@ -27,6 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import build_session_factory
 from app.extraction import ExtractionFailed, extract_docx_text, extract_pdf_text
+from app.github import get_github_client
+from app.github.ingestion import run_ingestion
 from app.models.resume import Resume
 from app.schemas.resume import ResumeStatus
 from app.settings import get_settings
@@ -228,3 +231,49 @@ def enqueue_extraction(resume_id: uuid.UUID) -> None:
         extract_resume_text.delay(str(resume_id))
     except Exception:
         logger.exception("failed to enqueue extraction for resume %s", resume_id)
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]  # celery ships no stubs — see the mypy override above
+    bind=True, max_retries=get_settings().github_ingestion_max_retries
+)
+def ingest_github_repositories(self: Any, run_id: str) -> None:
+    """Celery entry point for one GitHub ingestion run (Prompt 3.2).
+
+    The same sync/async bridge as extract_resume_text: a thin sync task
+    that `asyncio.run(...)`s into async logic, with the run row in
+    Postgres as the single source of truth for job state.
+
+    RATE LIMITING IS RETRIED WITHOUT CONSUMING AN ATTEMPT. When
+    app/github/ingestion.py asks for a rate-limit pause it returns a
+    delay taken from GitHub's own X-RateLimit-Reset, and this retries
+    with `max_retries=None` — being throttled is not a failure of our
+    code, and letting it burn the small transient-error budget would
+    turn a wait into a failed import. Every repository already committed
+    survives the pause; the resumed attempt skips them.
+    """
+    max_attempts = self.max_retries + 1
+    attempt = self.request.retries + 1
+    client = get_github_client()
+
+    async def _run() -> Any:
+        factory = get_worker_session_factory()
+        async with factory() as db:
+            return await run_ingestion(db, client, uuid.UUID(run_id), attempt, max_attempts)
+
+    outcome = asyncio.run(_run())
+    if outcome.should_retry:
+        if outcome.retry_after_seconds:
+            raise self.retry(countdown=outcome.retry_after_seconds, max_retries=None)
+        raise self.retry()
+
+
+def enqueue_github_ingestion(run_id: uuid.UUID) -> None:
+    """Called right after an ingestion run row is committed
+    (app/api/v1/github_ingestion.py). Best-effort, exactly like
+    enqueue_extraction: if Redis is unreachable the run row still
+    exists and simply stays "queued" with nothing to process it, rather
+    than failing the request that created it."""
+    try:
+        ingest_github_repositories.delay(str(run_id))
+    except Exception:
+        logger.exception("failed to enqueue github ingestion for run %s", run_id)

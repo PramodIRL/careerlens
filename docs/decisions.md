@@ -872,4 +872,106 @@ Add one entry per decision, most recent first.
   `input` key: no test reads it, and the web client reads only
   `detail[0].msg`.
 
+- **Date**: 2026-08-24
+- **Decision**: Cap one GitHub import at 20 repositories' worth of
+  detail (`GITHUB_MAX_REPOSITORIES`), skipping forks, most recently
+  pushed first — while still storing basic details for *every* listed
+  repository.
+- **Problem**: Unauthenticated GitHub allows 60 requests/hour per IP.
+  Each repository costs two (languages + README), so 50 repositories
+  would need 102 requests and simply cannot be imported within an hour.
+- **Alternatives**: (1) no cap, and accept that large accounts fail
+  partway; (2) cap the *listing* instead, so we never learn the true
+  repository count; (3) require a GitHub token to lift the limit.
+- **Trade-off**: A token would raise the ceiling to 5000/hour and remove
+  the problem entirely — and is exactly what Prompt 3.1 ruled out, since
+  it would mean asking for a credential to read data that is already
+  public. Capping the listing would be cheaper but would destroy the
+  honest "your account has N repositories" figure and, worse, would make
+  deletion reconciliation unsafe. So the cap falls on detail fetching
+  only: the listing is always walked in full, base rows are written for
+  every repository (that data is already in the listing response and
+  costs no extra request), and only languages/README are limited.
+- **Outcome**: `repositories_available`, `repositories_forks_excluded`
+  and `repositories_total` are three separate columns precisely so the
+  UI can say "Imported the 20 most recently updated of your 47 public
+  repositories" instead of "Imported 20 repositories", which a user
+  reasonably reads as "I have 20". Whether the cap was hit is derived at
+  the response boundary, not stored. Covered by `importSummary` unit
+  tests in `github-section.test.tsx` and by
+  `test_cap_limits_detail_to_the_most_recently_pushed`.
+
+- **Date**: 2026-08-24
+- **Decision**: GitHub rate limiting pauses an ingestion run at the RUN
+  level and is never recorded as a per-repository failure.
+- **Problem**: A run that hits the rate limit halfway through 20
+  repositories has not failed at anything — it has been told to come
+  back later. Treating it like a timeout would count healthy
+  repositories as broken and, with a retry, re-spend requests on work
+  already done.
+- **Alternatives**: (1) count it in `repositories_failed` like any other
+  upstream error; (2) fail the whole run and make the user restart.
+- **Trade-off**: Handling it separately costs a resume marker
+  (`github_repositories.detail_fetched_at`) that cannot be inferred from
+  `updated_at`, because base rows are written for repositories whose
+  detail was never fetched. Worth it: without it, a resumed run either
+  re-fetches everything (spending the budget that was exhausted in the
+  first place) or skips repositories it never actually read.
+- **Outcome**: `GitHubRateLimited` is caught at the loop level, writes
+  nothing for the in-flight repository, leaves the run `processing`, and
+  returns a delay computed from GitHub's own `X-RateLimit-Reset`. The
+  Celery task retries with `max_retries=None` for this case only —
+  being throttled is not a failure of our code, and letting it burn the
+  small transient-error budget would turn a wait into a failed import.
+  Pinned by `test_rate_limit_pauses_the_run_and_preserves_progress` and
+  `test_a_resumed_run_skips_repositories_already_handled`.
+
+- **Date**: 2026-08-24
+- **Decision**: Reconcile repository deletions ONLY from a listing that
+  paginated to completion, and soft-delete rather than remove.
+- **Problem**: The natural implementation — "anything not in this run's
+  listing is gone" — is silently catastrophic when the listing was cut
+  short by a timeout or a page cap. It would erase a user's entire
+  history and look like correct cleanup code while doing it.
+- **Alternatives**: (1) reconcile unconditionally; (2) hard-delete rows;
+  (3) treat a per-repository 404 on a detail endpoint as proof of
+  deletion.
+- **Trade-off**: Making completeness explicit costs a field on the
+  client's return type (`RepositoryListing.complete`) rather than
+  inferring it from list length — deliberately, so the decision cannot
+  be got wrong by accident. Option (3) is rejected for the same class of
+  reason: a detail 404 is a race with the listing, not an authoritative
+  absence, and a stray race must not do what only a complete listing may.
+  Soft delete costs a `deleted_at` filter on every read query, and buys
+  the ability for Prompt 3.3's evidence to stay explicable instead of a
+  skill silently losing its support.
+- **Outcome**: `test_incomplete_listing_never_soft_deletes_anything`,
+  `test_a_detail_404_does_not_soft_delete_the_repository`, and
+  `test_a_reappearing_repository_is_undeleted` are the three that hold
+  this together.
+
+- **Date**: 2026-08-24
+- **Decision**: Store the README as truncated text + SHA + original byte
+  size + a truncation flag, and store NO raw GitHub JSON payloads
+  anywhere.
+- **Problem**: "Store only the necessary raw snapshots for traceability"
+  needs a definition, or it drifts into keeping every response body.
+- **Alternatives**: (1) keep raw JSON for the profile, listing and
+  languages responses; (2) store only a README hash; (3) store the
+  README untruncated.
+- **Trade-off**: A hash is smaller and tamper-evident, but Prompt 3.3
+  must quote a verbatim excerpt as evidence and a hash cannot be quoted
+  — that alone settles it. Raw JSON would duplicate columns we just
+  normalized, re-introduce the personal fields (avatar, email, bio,
+  follower counts) that Prompt 3.1 deliberately declined to store, and
+  grow without bound. Untruncated README text has no size ceiling on
+  third-party content.
+- **Outcome**: The README is the single retained source snapshot.
+  `readme_sha` makes it traceable and short-circuits the WRITE on a
+  rerun — though not the request: reading the SHA requires fetching the
+  README, and conditional requests (ETag) are out of scope for 3.2.
+  Everything else is traceable through `github_repo_id` + `full_name` +
+  `last_seen_at` on the repository and `started_at`/`attempt_count` on
+  the run.
+
 <!-- Add new entries above this line, most recent first. -->

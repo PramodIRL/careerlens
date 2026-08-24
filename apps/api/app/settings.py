@@ -101,6 +101,34 @@ class Settings(BaseSettings):
     # a user, and carries no credential.
     github_user_agent: str = "CareerLens/0.1 (+https://github.com/careerlens)"
 
+    # --- Public GitHub ingestion (Prompt 3.2) ---
+    # How many repositories one ingestion run will fetch DETAIL for
+    # (languages + README). This is a hard budget constraint, not a
+    # preference: unauthenticated GitHub allows 60 requests/hour per IP,
+    # and each repository costs two of them. 20 repositories is already
+    # ~42 requests — about 70% of the hourly budget for a single user.
+    # Repositories are processed most-recently-pushed first, so the cap
+    # keeps the most relevant work. Forks are excluded before the cap is
+    # applied and never spend a request.
+    github_max_repositories: int = 20
+    # Safety valve on pagination. 10 pages x 100 per page = 1000
+    # repositories. Hitting it marks the listing INCOMPLETE, which
+    # suppresses deletion reconciliation (app/github/ingestion.py) —
+    # never delete based on a listing we know was cut short.
+    github_max_repository_pages: int = 10
+    # README text is truncated to this many characters before storage.
+    # Prompt 3.3 must quote a verbatim excerpt as evidence, so the text
+    # itself has to be kept — a hash cannot be quoted — but a README is
+    # third-party content with no natural size bound. 20k characters
+    # covers essentially every real README; anything longer is stored
+    # truncated with `readme_truncated` set, never silently clipped.
+    github_readme_max_chars: int = 20_000
+    # How many times a *transient* ingestion failure (timeout, 5xx,
+    # transport error) is retried before the run is marked failed.
+    # Rate limiting is retried separately and does not consume these
+    # attempts in the same way — see app/github/ingestion.py.
+    github_ingestion_max_retries: int = 2
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""

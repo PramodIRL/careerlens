@@ -147,7 +147,9 @@ def _clean_tables() -> None:
                         "TRUNCATE refresh_tokens, users, profiles, skills, "
                         "profile_target_roles, profile_target_skills, resumes, "
                         "skill_aliases, skill_relations, candidate_skills, "
-                        "skill_evidence, github_connections "
+                        "skill_evidence, github_connections, github_repositories, "
+                        "github_repository_languages, github_repository_topics, "
+                        "github_ingestion_runs "
                         "RESTART IDENTITY CASCADE"
                     )
                 )

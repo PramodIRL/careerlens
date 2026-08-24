@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.auth import router as auth_router
 from app.api.v1.candidate_skill import router as candidate_skill_router
 from app.api.v1.github_connection import router as github_connection_router
+from app.api.v1.github_ingestion import router as github_ingestion_router
 from app.api.v1.health import router as health_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.resume import router as resume_router
@@ -51,3 +52,6 @@ app.include_router(profile_router, prefix="/api/v1/profiles")
 app.include_router(resume_router, prefix="/api/v1/resumes")
 app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
 app.include_router(github_connection_router, prefix="/api/v1/github-connection")
+# Prompt 3.2 — mounted under the same prefix: an import belongs to a
+# connection, and there is no ingestion without one.
+app.include_router(github_ingestion_router, prefix="/api/v1/github-connection")

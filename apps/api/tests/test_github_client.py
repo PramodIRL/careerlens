@@ -18,6 +18,7 @@ is async and there is no Celery-style `asyncio.run()` bridge in the way
 (contrast tests/test_extraction.py, which must use sync defs).
 """
 
+import base64
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -26,11 +27,13 @@ import pytest
 
 from app.github.base import (
     GitHubRateLimited,
+    GitHubRepositoryNotFound,
     GitHubTimeout,
     GitHubUnavailable,
     GitHubUserNotFound,
 )
 from app.github.http import HttpGitHubClient
+from app.settings import get_settings
 
 _BASE_URL = "https://api.github.test"
 _USER_AGENT = "CareerLens-Test/0.1"
@@ -275,3 +278,279 @@ async def test_organization_payload_is_returned_for_the_route_to_judge(
     user = await _client(_responds(200, json=org)).get_user("example-org")
 
     assert user.type == "Organization"
+
+
+# --------------------------------------------------------------------
+# Prompt 3.2: repository listing, languages, README
+# --------------------------------------------------------------------
+
+
+def _repo_payload(**overrides: object) -> dict[str, object]:
+    """A realistic repository payload, including fields we deliberately
+    drop — `clone_url` and `owner` are here to show they are read and
+    discarded, never stored."""
+    payload: dict[str, object] = {
+        "id": 1296269,
+        "name": "hello-world",
+        "full_name": "octocat/hello-world",
+        "private": False,
+        "fork": False,
+        "archived": False,
+        "description": "My first repository",
+        "language": "Python",
+        "stargazers_count": 42,
+        "forks_count": 7,
+        "topics": ["python", "cli"],
+        "pushed_at": "2026-08-01T10:00:00Z",
+        "created_at": "2025-01-01T10:00:00Z",
+        "updated_at": "2026-08-01T10:00:00Z",
+        "clone_url": "https://github.test/octocat/hello-world.git",
+        "owner": {"login": "octocat", "avatar_url": "https://example.com/a.png"},
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.anyio
+async def test_list_repositories_parses_and_drops_what_it_should(anyio_backend: str) -> None:
+    listing = await _client(_responds(200, json=[_repo_payload()])).list_repositories("octocat")
+
+    assert listing.complete is True
+    assert len(listing.repositories) == 1
+    repo = listing.repositories[0]
+    assert repo.id == 1296269
+    assert repo.full_name == "octocat/hello-world"
+    assert repo.topics == ["python", "cli"]
+    assert repo.stargazers_count == 42
+    # Dropped at the parse boundary — not merely "not persisted later".
+    assert not hasattr(repo, "clone_url")
+    assert not hasattr(repo, "owner")
+
+
+@pytest.mark.anyio
+async def test_list_repositories_follows_link_header_across_pages(anyio_backend: str) -> None:
+    """Pagination follows the server's own rel="next" link rather than
+    incrementing a counter — a counter silently truncates when a
+    repository is added or removed mid-walk."""
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if "page=2" in str(request.url):
+            # Last page: no Link header at all.
+            return httpx.Response(200, json=[_repo_payload(id=2, name="second")])
+        return httpx.Response(
+            200,
+            json=[_repo_payload(id=1, name="first")],
+            headers={"Link": f'<{_BASE_URL}/users/octocat/repos?page=2>; rel="next"'},
+        )
+
+    listing = await _client(handler).list_repositories("octocat")
+
+    assert listing.complete is True
+    assert [repo.id for repo in listing.repositories] == [1, 2]
+    assert len(requested) == 2
+    assert "per_page=100" in requested[0]
+    assert "type=owner" in requested[0]
+    assert "sort=pushed" in requested[0]
+
+
+@pytest.mark.anyio
+async def test_list_repositories_stops_at_the_last_page(anyio_backend: str) -> None:
+    """A Link header with only rel="prev" must not be mistaken for a
+    next page — otherwise the walk never terminates."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            json=[_repo_payload()],
+            headers={"Link": f'<{_BASE_URL}/users/octocat/repos?page=1>; rel="prev"'},
+        )
+
+    listing = await _client(handler).list_repositories("octocat")
+
+    assert calls["n"] == 1
+    assert listing.complete is True
+
+
+@pytest.mark.anyio
+async def test_list_repositories_marks_incomplete_at_the_page_cap(
+    anyio_backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The load-bearing flag: a listing cut short must report
+    complete=False, because the caller uses it to decide whether it may
+    soft-delete repositories it did not see."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "github_max_repository_pages", 2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[_repo_payload(id=1)],
+            headers={"Link": f'<{_BASE_URL}/users/octocat/repos?page=99>; rel="next"'},
+        )
+
+    listing = await _client(handler).list_repositories("octocat")
+
+    assert listing.complete is False
+    assert len(listing.repositories) == 2
+
+
+@pytest.mark.anyio
+async def test_list_repositories_rate_limited_mid_pagination_raises(anyio_backend: str) -> None:
+    """A rate limit on page two is still a rate limit — it must not be
+    reported as a short-but-complete listing."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "page=2" in str(request.url):
+            return httpx.Response(
+                403,
+                json={"message": "API rate limit exceeded"},
+                headers={"X-RateLimit-Remaining": "0"},
+            )
+        return httpx.Response(
+            200,
+            json=[_repo_payload()],
+            headers={"Link": f'<{_BASE_URL}/users/octocat/repos?page=2>; rel="next"'},
+        )
+
+    with pytest.raises(GitHubRateLimited):
+        await _client(handler).list_repositories("octocat")
+
+
+@pytest.mark.anyio
+async def test_list_repositories_404_is_user_not_found(anyio_backend: str) -> None:
+    with pytest.raises(GitHubUserNotFound):
+        await _client(_responds(404, json={"message": "Not Found"})).list_repositories("nobody")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"not": "a list"},
+        [{"name": "missing-id"}],
+        ["just a string"],
+    ],
+)
+async def test_list_repositories_rejects_malformed_payloads(
+    payload: object, anyio_backend: str
+) -> None:
+    with pytest.raises(GitHubUnavailable):
+        await _client(_responds(200, json=payload)).list_repositories("octocat")
+
+
+@pytest.mark.anyio
+async def test_get_languages_parses_byte_counts(anyio_backend: str) -> None:
+    handler = _responds(200, json={"Python": 12345, "HTML": 234})
+
+    assert await _client(handler).get_languages("octocat/hello-world") == {
+        "Python": 12345,
+        "HTML": 234,
+    }
+
+
+@pytest.mark.anyio
+async def test_get_languages_empty_dict_is_valid(anyio_backend: str) -> None:
+    """A repository with no detected code answers `200 {}`. That is an
+    answer, not a failure."""
+    assert await _client(_responds(200, json={})).get_languages("octocat/empty") == {}
+
+
+@pytest.mark.anyio
+async def test_get_languages_404_is_repository_not_found(anyio_backend: str) -> None:
+    """Distinct from GitHubUserNotFound: the account is fine, this one
+    repository vanished between being listed and being fetched."""
+    with pytest.raises(GitHubRepositoryNotFound):
+        await _client(_responds(404, json={"message": "Not Found"})).get_languages("octocat/gone")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("payload", [{"Python": "lots"}, ["Python"], "Python"])
+async def test_get_languages_rejects_malformed_payloads(
+    payload: object, anyio_backend: str
+) -> None:
+    with pytest.raises(GitHubUnavailable):
+        await _client(_responds(200, json=payload)).get_languages("octocat/hello-world")
+
+
+@pytest.mark.anyio
+async def test_get_readme_decodes_base64_and_keeps_the_sha(anyio_backend: str) -> None:
+    text = "# Hello World\n\nBuilt with Python and FastAPI.\n"
+    handler = _responds(
+        200,
+        json={
+            "encoding": "base64",
+            "content": base64.b64encode(text.encode()).decode(),
+            "sha": "abc123def456",
+            "size": len(text.encode()),
+        },
+    )
+
+    readme = await _client(handler).get_readme("octocat/hello-world")
+
+    assert readme is not None
+    assert readme.text == text
+    # The SHA is what makes the snapshot traceable and lets a rerun skip
+    # re-storing unchanged content.
+    assert readme.sha == "abc123def456"
+    assert readme.size_bytes == len(text.encode())
+
+
+@pytest.mark.anyio
+async def test_get_readme_404_returns_none_rather_than_raising(anyio_backend: str) -> None:
+    """Most repositories have no README, and GitHub has no way to say
+    that other than a 404. Treating it as an error would make the normal
+    case look like a failure and inflate repositories_failed."""
+    assert await _client(_responds(404, json={"message": "Not Found"})).get_readme("o/r") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"encoding": "utf-8", "content": "plain", "sha": "abc", "size": 5},
+        {"encoding": "base64", "sha": "abc", "size": 5},
+        {"encoding": "base64", "content": "!!!not base64!!!", "size": 5},
+        ["not an object"],
+    ],
+)
+async def test_get_readme_rejects_unusable_payloads(payload: object, anyio_backend: str) -> None:
+    with pytest.raises(GitHubUnavailable):
+        await _client(_responds(200, json=payload)).get_readme("octocat/hello-world")
+
+
+@pytest.mark.anyio
+async def test_new_endpoints_send_no_credential_either(anyio_backend: str) -> None:
+    """The Prompt 3.1 guarantee, re-asserted over every endpoint Prompt
+    3.2 adds — a token accidentally introduced here would make things
+    work better, not worse, so nothing else would catch it."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.endswith("/languages"):
+            return httpx.Response(200, json={"Python": 1})
+        if request.url.path.endswith("/readme"):
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(b"# hi").decode(),
+                    "sha": "s",
+                    "size": 4,
+                },
+            )
+        return httpx.Response(200, json=[_repo_payload()])
+
+    client = _client(handler)
+    await client.list_repositories("octocat")
+    await client.get_languages("octocat/hello-world")
+    await client.get_readme("octocat/hello-world")
+
+    assert len(seen) == 3
+    for request in seen:
+        assert "authorization" not in {name.lower() for name in request.headers}
+        assert request.headers["User-Agent"] == _USER_AGENT

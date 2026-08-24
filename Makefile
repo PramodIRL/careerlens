@@ -10,7 +10,7 @@ help:
 	@echo "  make start          Start Postgres + Redis via Docker Compose"
 	@echo "  make start-web      Run the Next.js dev server (host, foreground)"
 	@echo "  make start-api      Run the FastAPI dev server (host, foreground)"
-	@echo "  make start-worker   Run the Celery resume-extraction worker (host, foreground)"
+	@echo "  make start-worker   Run the Celery worker: resume extraction + GitHub ingestion"
 	@echo "  make stop           Stop the Docker Compose data services"
 	@echo "  make migrate        Apply all pending Alembic migrations"
 	@echo "  make migrate-status Show the current Alembic migration"
@@ -48,7 +48,7 @@ start: services-up
 	@echo "Postgres and Redis are up. In separate terminals, run:"
 	@echo "  make start-web"
 	@echo "  make start-api"
-	@echo "  make start-worker  (only needed to process resume text extraction)"
+	@echo "  make start-worker  (processes resume extraction and GitHub imports)"
 
 start-web:
 	cd apps/web && npm run dev
@@ -56,9 +56,10 @@ start-web:
 start-api:
 	cd apps/api && uv run uvicorn app.main:app --reload --port 8000
 
-# Processes resume text-extraction jobs (Prompt 2.2) — without this
-# running, uploaded resumes stay "queued" forever; nothing else in the
-# app blocks on it. See apps/api/app/worker.py.
+# Processes resume text-extraction jobs (Prompt 2.2) and GitHub
+# ingestion runs (Prompt 3.2) — without this running, uploaded resumes
+# and queued imports stay "queued" forever; nothing else in the app
+# blocks on it. See apps/api/app/worker.py.
 start-worker:
 	cd apps/api && uv run celery -A app.worker worker --loglevel=info
 
