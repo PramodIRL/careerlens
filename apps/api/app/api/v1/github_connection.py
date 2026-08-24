@@ -47,6 +47,7 @@ from app.github import (
     GitHubUserNotFound,
     get_github_client,
 )
+from app.github.skill_evidence import purge_github_skill_evidence
 from app.models.github_connection import GitHubConnection
 from app.models.github_ingestion_run import GitHubIngestionRun
 from app.models.github_repository import GitHubRepository
@@ -210,17 +211,30 @@ async def disconnect_github(
     connection. Languages and topics follow by ON DELETE CASCADE from
     the repository rows.
 
-    Known consequence, deliberately not pre-empted here: once Prompt 3.3
-    writes GitHub-derived evidence, that evidence will cite repositories
-    this deletes — the same dangling polymorphic reference
-    docs/decisions.md already accepts for deleted resumes. Whether
-    disconnecting should also purge that evidence is Prompt 3.3's
-    decision to make, not this one's.
+    Prompt 3.3 answers the question 3.2 deferred: GitHub-DERIVED skill
+    evidence goes too. That diverges from the dangling reference
+    docs/decisions.md accepts for a deleted resume, and the asymmetry is
+    the justification — deleted-resume evidence is still RECONCILABLE,
+    because the resume extractor may run again, whereas after a
+    disconnect there is no connection and GitHub reconciliation will
+    never run again. Leaving it would strand the user with skills citing
+    repositories that no longer exist and no mechanism to remove them:
+    unrecoverable, not merely dangling.
+
+    WHAT SURVIVES A DISCONNECT: every resume-derived and manually added
+    piece of evidence, and every confirmed or rejected candidate skill.
+    Only UNREVIEWED suggestions left with no evidence at all are removed.
+    A confirmed skill may therefore survive with zero evidence — the
+    existing, intended semantics (the user asserted it), identical to
+    today's behaviour after a resume is deleted.
     """
     connection = await _get_connection(db, current_user.id)
     if connection is None:
         return
 
+    # Before the repositories go, so the evidence citing them is removed
+    # deliberately rather than left pointing at rows that no longer exist.
+    await purge_github_skill_evidence(db, current_user.id)
     await db.execute(delete(GitHubRepository).where(GitHubRepository.user_id == current_user.id))
     await db.execute(
         delete(GitHubIngestionRun).where(GitHubIngestionRun.user_id == current_user.id)

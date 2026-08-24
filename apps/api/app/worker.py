@@ -30,7 +30,10 @@ from app.db import build_session_factory
 from app.extraction import ExtractionFailed, extract_docx_text, extract_pdf_text
 from app.github import get_github_client
 from app.github.ingestion import run_ingestion
+from app.github.skill_evidence import extract_github_skill_evidence
+from app.models.github_ingestion_run import GitHubIngestionRun
 from app.models.resume import Resume
+from app.schemas.github_ingestion import IngestionStatus
 from app.schemas.resume import ResumeStatus
 from app.settings import get_settings
 from app.skill_extraction import extract_skills_for_resume
@@ -233,6 +236,43 @@ def enqueue_extraction(resume_id: uuid.UUID) -> None:
         logger.exception("failed to enqueue extraction for resume %s", resume_id)
 
 
+async def _derive_github_skills(db: AsyncSession, run_id: uuid.UUID) -> None:
+    """Prompt 3.3: turn the repositories this run just imported into
+    candidate skills and evidence.
+
+    Deliberately best-effort and non-fatal, exactly like the resume
+    equivalent above — the repositories genuinely WERE imported, so a
+    failure deriving skills from them must not flip a succeeded run to
+    "failed" or trigger a Celery retry of GitHub work that is already
+    done (and that would re-spend a 60-request/hour budget).
+
+    Skipped unless the run actually reached "succeeded". A run paused by
+    rate limiting is still `processing` and will resume on its own;
+    deriving skills from a half-imported account would reconcile against
+    a partial repository set for no benefit.
+
+    A skipped or failed derivation self-heals completely on the next
+    successful import, and that is a designed property rather than luck:
+    reconciliation in app/github/skill_evidence.py is a FULL sweep
+    against a freshly computed desired set, so the next run re-derives
+    everything from scratch rather than patching a partial state. That is
+    what makes best-effort safe here.
+    """
+    run = await db.get(GitHubIngestionRun, run_id)
+    if run is None or run.status != IngestionStatus.SUCCEEDED.value:
+        return
+    try:
+        summary = await extract_github_skill_evidence(db, run.user_id)
+    except Exception:
+        logger.exception(
+            "github skill extraction failed for run %s (the import itself still succeeded)",
+            run_id,
+        )
+        await db.rollback()
+    else:
+        logger.info("github skill extraction for run %s: %s", run_id, summary)
+
+
 @celery_app.task(  # type: ignore[untyped-decorator]  # celery ships no stubs — see the mypy override above
     bind=True, max_retries=get_settings().github_ingestion_max_retries
 )
@@ -258,7 +298,10 @@ def ingest_github_repositories(self: Any, run_id: str) -> None:
     async def _run() -> Any:
         factory = get_worker_session_factory()
         async with factory() as db:
-            return await run_ingestion(db, client, uuid.UUID(run_id), attempt, max_attempts)
+            outcome = await run_ingestion(db, client, uuid.UUID(run_id), attempt, max_attempts)
+            if not outcome.should_retry:
+                await _derive_github_skills(db, uuid.UUID(run_id))
+            return outcome
 
     outcome = asyncio.run(_run())
     if outcome.should_retry:

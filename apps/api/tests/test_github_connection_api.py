@@ -17,6 +17,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Generator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -34,10 +35,15 @@ from app.github import (
     GitHubUserNotFound,
     get_github_client,
 )
+from app.github.skill_evidence import extract_github_skill_evidence
 from app.main import app
+from app.models.candidate_skill import CandidateSkill
 from app.models.github_connection import GitHubConnection
+from app.models.github_repository import GitHubRepository, GitHubRepositoryLanguage
+from app.models.skill_evidence import SkillEvidence
 from app.rate_limit import _request_log
 from app.settings import get_settings
+from scripts.seed_skills import seed_skill_taxonomy
 from tests.conftest import TEST_SCHEMA, isolated_schema_override
 
 _SEARCH_PATH_CONNECT_ARGS = {"server_settings": {"search_path": TEST_SCHEMA}}
@@ -309,6 +315,117 @@ def test_disconnect_is_idempotent(client: TestClient) -> None:
 
     assert client.delete(_BASE, headers=_headers(token)).status_code == 204
     assert client.delete(_BASE, headers=_headers(token)).status_code == 204
+
+
+def _seed_github_derived_skills(user_id: str) -> None:
+    """Put a user in the state a completed import + Prompt 3.3 extraction
+    would leave them in: one repository, and the candidate skills and
+    evidence derived from it."""
+
+    async def _seed(session: AsyncSession) -> None:
+        await seed_skill_taxonomy(session)
+        repository = GitHubRepository(
+            id=uuid.uuid4(),
+            user_id=uuid.UUID(user_id),
+            github_repo_id=987_654,
+            name="toolkit",
+            full_name="octocat/toolkit",
+            primary_language="Python",
+        )
+        session.add(repository)
+        await session.flush()
+        session.add(
+            GitHubRepositoryLanguage(repository_id=repository.id, language="Java", byte_count=120)
+        )
+        await session.commit()
+        await extract_github_skill_evidence(session, uuid.UUID(user_id))
+
+    _run(_seed)
+
+
+def _evidence_source_types(user_id: str) -> list[str]:
+    async def _read(session: AsyncSession) -> list[str]:
+        rows = (
+            await session.scalars(
+                select(SkillEvidence.source_type)
+                .join(CandidateSkill, CandidateSkill.id == SkillEvidence.candidate_skill_id)
+                .where(CandidateSkill.user_id == uuid.UUID(user_id))
+            )
+        ).all()
+        return sorted(rows)
+
+    return _run(_read)
+
+
+def _candidate_skill_statuses(user_id: str) -> list[str]:
+    async def _read(session: AsyncSession) -> list[str]:
+        rows = (
+            await session.scalars(
+                select(CandidateSkill.status).where(CandidateSkill.user_id == uuid.UUID(user_id))
+            )
+        ).all()
+        return sorted(rows)
+
+    return _run(_read)
+
+
+def test_disconnect_purges_github_derived_skill_evidence(client: TestClient) -> None:
+    """Prompt 3.3 answers what 3.2 deferred. Unlike a deleted resume —
+    whose evidence stays reconcilable because the extractor may run again
+    — nothing will ever reconcile GitHub evidence after a disconnect, so
+    leaving it would strand the user with skills citing repositories that
+    no longer exist and no way to remove them."""
+    _use_client(FakeGitHubClient(user=_github_user()))
+    token, user_id = _new_user(client)
+    _connect(client, token, "octocat")
+    _seed_github_derived_skills(user_id)
+    assert _evidence_source_types(user_id) == ["github", "github"]
+
+    assert client.delete(_BASE, headers=_headers(token)).status_code == 204
+
+    assert _evidence_source_types(user_id) == []
+    # Both were unreviewed suggestions with no other support, so they go.
+    assert _candidate_skill_statuses(user_id) == []
+
+
+def test_disconnect_preserves_reviewed_skills_and_non_github_evidence(
+    client: TestClient,
+) -> None:
+    _use_client(FakeGitHubClient(user=_github_user()))
+    token, user_id = _new_user(client)
+    _connect(client, token, "octocat")
+    _seed_github_derived_skills(user_id)
+
+    async def _review_and_add_manual(session: AsyncSession) -> None:
+        rows = (
+            await session.scalars(
+                select(CandidateSkill).where(CandidateSkill.user_id == uuid.UUID(user_id))
+            )
+        ).all()
+        # Confirm one of the GitHub-derived skills...
+        rows[0].status = "confirmed"
+        # ...and give another an independent manual assertion.
+        session.add(
+            SkillEvidence(
+                candidate_skill_id=rows[1].id,
+                source_type="manual",
+                source_identifier=user_id,
+                excerpt=None,
+                extraction_method="manual_entry",
+                confidence=Decimal("1.00"),
+            )
+        )
+        await session.commit()
+
+    _run(_review_and_add_manual)
+
+    assert client.delete(_BASE, headers=_headers(token)).status_code == 204
+
+    # The manual assertion survives; every github row is gone.
+    assert _evidence_source_types(user_id) == ["manual"]
+    # The confirmed decision survives even with no evidence left, and the
+    # manually supported skill survives because it still has evidence.
+    assert _candidate_skill_statuses(user_id) == ["confirmed", "suggested"]
 
 
 # --------------------------------------------------------------------
