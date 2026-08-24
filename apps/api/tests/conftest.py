@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 import app.models  # noqa: F401  (registers ORM models onto Base.metadata)
 from app.db import Base, build_session_factory
@@ -17,6 +18,20 @@ TEST_SCHEMA = "careerlens_test"
 _SEARCH_PATH_CONNECT_ARGS = {"server_settings": {"search_path": TEST_SCHEMA}}
 
 
+# Test engines use NullPool (see the calls below).
+#
+# Why it matters: a pooled connection outlives the event loop that opened
+# it, and an asyncpg connection cannot be closed from a different loop —
+# so the TestClient's per-test loop closes while its pooled connections
+# stay open server-side, and disposing the engine afterwards cannot
+# reclaim them. Left pooled, a full run's open-connection count climbs
+# monotonically (measured: 5 -> 98 and still rising) until Postgres
+# refuses new connections and whichever test happens to be running fails
+# with TooManyConnectionsError, unrelated to the code under test.
+#
+# NullPool opens a connection per session and closes it when that session
+# closes, inside the one loop that used it. Slightly more connection
+# churn, in exchange for a suite whose connection use is flat.
 def db_override_for(
     database_url: str,
     *,
@@ -25,7 +40,7 @@ def db_override_for(
     """Build a FastAPI `get_db` override bound to the given database URL,
     without touching the app's real configuration. Shared by every test
     module that needs the database, rather than each reinventing this."""
-    factory = build_session_factory(database_url, connect_args=connect_args)
+    factory = build_session_factory(database_url, connect_args=connect_args, poolclass=NullPool)
 
     async def _get_db() -> AsyncGenerator[AsyncSession, None]:
         async with factory() as session:
@@ -82,7 +97,11 @@ def _isolated_test_schema() -> Generator[None, None, None]:
     # binds its connections to the first (already-closed) event loop and
     # raises "Future attached to a different loop" on the second use.
     async def _create() -> None:
-        engine = create_async_engine(settings.database_url, connect_args=_SEARCH_PATH_CONNECT_ARGS)
+        engine = create_async_engine(
+            settings.database_url,
+            connect_args=_SEARCH_PATH_CONNECT_ARGS,
+            poolclass=NullPool,
+        )
         try:
             async with engine.begin() as conn:
                 await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{TEST_SCHEMA}"'))
@@ -116,7 +135,11 @@ def _clean_tables() -> None:
     settings = get_settings()
 
     async def _truncate() -> None:
-        engine = create_async_engine(settings.database_url, connect_args=_SEARCH_PATH_CONNECT_ARGS)
+        engine = create_async_engine(
+            settings.database_url,
+            connect_args=_SEARCH_PATH_CONNECT_ARGS,
+            poolclass=NullPool,
+        )
         try:
             async with engine.begin() as conn:
                 await conn.execute(
@@ -124,7 +147,7 @@ def _clean_tables() -> None:
                         "TRUNCATE refresh_tokens, users, profiles, skills, "
                         "profile_target_roles, profile_target_skills, resumes, "
                         "skill_aliases, skill_relations, candidate_skills, "
-                        "skill_evidence "
+                        "skill_evidence, github_connections "
                         "RESTART IDENTITY CASCADE"
                     )
                 )

@@ -84,6 +84,23 @@ class Settings(BaseSettings):
     # see app/worker.py's _TransientExtractionError / _PermanentExtractionError.
     resume_extraction_max_retries: int = 2
 
+    # --- Public GitHub connection (Prompt 3.1) ---
+    # Base URL for GitHub's REST API. Configurable so a test or a future
+    # GitHub Enterprise deployment can point elsewhere; there is no
+    # credential here and never will be one in this flow — CareerLens
+    # reads only unauthenticated, public endpoints.
+    github_api_base_url: str = "https://api.github.com"
+    # Total budget for one GitHub request. A user is waiting on a form
+    # submit while this runs, so it must be short and hard — the whole
+    # point of doing this in the request path rather than a worker is
+    # that it is bounded. Applied per phase (connect/read/write/pool) by
+    # app/github/http.py.
+    github_request_timeout_seconds: float = 5.0
+    # GitHub rejects API requests that send no User-Agent, so this is
+    # required rather than cosmetic. It identifies the application, not
+    # a user, and carries no credential.
+    github_user_agent: str = "CareerLens/0.1 (+https://github.com/careerlens)"
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.auth import router as auth_router
 from app.api.v1.candidate_skill import router as candidate_skill_router
+from app.api.v1.github_connection import router as github_connection_router
 from app.api.v1.health import router as health_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.resume import router as resume_router
@@ -30,7 +31,11 @@ app.add_middleware(
     # regardless of what the route itself allows (see docs/decisions.md).
     # DELETE added in Prompt 2.1 for the resume delete endpoint, learning
     # that lesson ahead of time instead of rediscovering it live again.
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    # PUT added in Prompt 3.1 for the GitHub connection endpoint, which is
+    # an idempotent replace of a per-user singleton. Same lesson a third
+    # time: without it the browser's preflight is rejected here with a 400
+    # and the route is never reached, however correct the route is.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
     # Prompt 1.2: the browser auth flow relies on an HttpOnly refresh-
     # token cookie, which the browser only attaches to (and accepts
@@ -45,3 +50,4 @@ app.include_router(auth_router, prefix="/api/v1/auth")
 app.include_router(profile_router, prefix="/api/v1/profiles")
 app.include_router(resume_router, prefix="/api/v1/resumes")
 app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
+app.include_router(github_connection_router, prefix="/api/v1/github-connection")
