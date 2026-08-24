@@ -22,14 +22,12 @@ same `asyncio.run(...)`-per-call pattern tests/conftest.py's own
 fixtures already use for the same reason."""
 
 import asyncio
-import io
 import uuid
 from collections.abc import Coroutine, Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from docx import Document
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import build_session_factory
@@ -40,6 +38,7 @@ from app.settings import get_settings
 from app.storage.base import ResumeStorage
 from app.storage.local import LocalResumeStorage
 from app.worker import celery_app, extract_resume_text
+from scripts.sample_resumes import build_docx_bytes, build_pdf_bytes
 from tests.conftest import TEST_SCHEMA
 
 _SEARCH_PATH_CONNECT_ARGS = {"server_settings": {"search_path": TEST_SCHEMA}}
@@ -52,45 +51,14 @@ def _run[T](coro: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coro)
 
 
-def _build_minimal_pdf(body_text: str) -> bytes:
-    """A minimal but *structurally valid* single-page PDF containing
-    `body_text`, with an accurate xref table pypdf can actually parse
-    — needed to test real extraction, not just a "%PDF-" magic-byte
-    stub (which is all Prompt 2.1's upload-validation tests needed)."""
-    objects: list[bytes | None] = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-        None,
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-    stream_body = f"BT /F1 12 Tf 72 720 Td ({body_text}) Tj ET".encode()
-    objects[3] = b"<< /Length %d >>\nstream\n" % len(stream_body) + stream_body + b"\nendstream"
-
-    buf = bytearray(b"%PDF-1.4\n")
-    offsets: list[int] = []
-    for i, obj in enumerate(objects, start=1):
-        assert obj is not None
-        offsets.append(len(buf))
-        buf += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
-    xref_offset = len(buf)
-    buf += f"xref\n0 {len(objects) + 1}\n".encode()
-    buf += b"0000000000 65535 f \n"
-    for off in offsets:
-        buf += f"{off:010d} 00000 n \n".encode()
-    buf += (
-        f"trailer\n<< /Root 1 0 R /Size {len(objects) + 1} >>\nstartxref\n{xref_offset}\n%%EOF"
-    ).encode()
-    return bytes(buf)
-
-
-def _build_minimal_docx(body_text: str) -> bytes:
-    document = Document()
-    document.add_paragraph(body_text)
-    buf = io.BytesIO()
-    document.save(buf)
-    return buf.getvalue()
+# The PDF/DOCX byte builders live in scripts/sample_resumes.py (Prompt
+# 2.5) so the fictional demo documents and these tests are rendered by
+# exactly one implementation — building a structurally valid PDF by hand
+# is ~40 lines, and a second copy would inevitably drift. Aliased under
+# the original private names because tests/test_requeue_stuck_resumes.py
+# imports them from this module.
+_build_minimal_pdf = build_pdf_bytes
+_build_minimal_docx = build_docx_bytes
 
 
 # Correct magic bytes (passes Prompt 2.1's upload validation) but no

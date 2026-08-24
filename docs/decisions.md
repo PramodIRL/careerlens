@@ -706,4 +706,78 @@ Add one entry per decision, most recent first.
   `skills-section.test.tsx` (10) — including a regression test that a
   "Rust" coined as a Prompt 1.3 target skill still returns 422 here.
 
+- **Date**: 2026-08-24
+- **Decision**: Ship fictional sample resumes as a *file generator*
+  (`make sample-resumes` → `apps/api/var/samples/`) and no
+  database seed/demo path at all.
+- **Problem**: Prompt 2.5 needs the resume-to-skills flow to be
+  demonstrable without real personal data. An upload stores the file on
+  disk and its *full extracted text* in the `resumes` table, so a
+  developer demoing with their own resume leaves a real name, address
+  and phone number in every dev database it touches — and the only
+  reason to reach for a real one is not having a safe one to hand.
+- **Alternatives**: (1) a dev-only seed command inserting a ready-made
+  user with pre-made resumes, candidate skills and evidence; (2) commit
+  a couple of PDF/DOCX fixtures to the repo; (3) fixtures in the test
+  suite only, with the manual demo left to improvise.
+- **Trade-off**: A database seed would be *faster* to demo, and that is
+  exactly what makes it the wrong tool: it bypasses upload → extraction
+  → review, which is the flow the demo exists to show, so it would
+  demonstrate the one part of the system nobody doubts (that rows can be
+  displayed) while skipping the part that is actually interesting. It
+  would also need a dev-only guard to avoid shipping an
+  insert-arbitrary-users backdoor, for zero demo value. Committing
+  binary fixtures avoids the generator but puts opaque blobs in git
+  history that no reviewer can diff, and invites "just add mine". The
+  generator costs one extra command before a demo and produces
+  documents nobody can inspect in a pull request — accepted, because the
+  *text* they are rendered from is a reviewable Python constant, and the
+  end-to-end test asserts on that same constant.
+- **Outcome**: `apps/api/scripts/sample_resumes.py` holds three
+  fictional resumes as plain text plus the PDF/DOCX builders; `make
+  sample-resumes` renders them to `apps/api/var/samples/` (already
+  gitignored, so a generated document cannot be committed) and touches
+  the database never. `tests/test_demo_end_to_end.py` enforces the
+  fiction mechanically — RFC 2606 `example.com` emails, `555-01xx`
+  phone numbers, an ASCII-only body, and a "not a real person" first
+  line that survives the round trip — so a real resume pasted in fails
+  CI rather than reaching a demo. The document builders were moved out
+  of `tests/test_extraction.py` (which now aliases them) so the demo
+  files and the tests are rendered by one implementation; the PDF
+  builder gained per-line text operators and `/WinAnsiEncoding`, which
+  a multi-line resume needs and a one-line test stub did not.
+
+- **Date**: 2026-08-24
+- **Decision**: Cover the demo with an API-level acceptance test
+  (`tests/test_demo_end_to_end.py`) running Celery in eager mode, rather
+  than adding Playwright or a real broker.
+- **Problem**: Every existing test covers one slice — upload, or
+  extraction, or matching, or the review endpoints. Nothing proved the
+  slices join up, which is precisely the claim a demo makes.
+- **Alternatives**: (1) Playwright driving a real browser against the
+  real stack; (2) a Redis service in CI plus a real worker process; (3)
+  extending `scripts/smoke.sh` with authenticated `curl` calls.
+- **Trade-off**: The eager-mode test cannot prove broker delivery —
+  `.delay()` executes in-process, so nothing demonstrates that a message
+  published by the API reaches a separate worker. That is a real gap,
+  stated in the test's own docstring and in `docs/demo.md` rather than
+  papered over. A Redis service in CI would close it, at the cost of a
+  worker process to supervise and poll for in every run; Playwright
+  would additionally close the browser gap, at the cost of a heavy new
+  dependency for a layer already covered by 19 component tests — the
+  same reasoning that kept a headless browser out of `smoke.sh`. Neither
+  buys enough to justify the weight at this stage.
+- **Outcome**: One test walks sign-up → login → upload → extraction
+  completes → evidence is present and *verbatim* → confirm one skill →
+  reject another → re-run extraction → both decisions survive. The
+  upload endpoint's `enqueue_extraction` is stubbed to a recorder and
+  the task invoked explicitly: under eager mode that call would run
+  `asyncio.run()` inside the TestClient's already-running event loop,
+  and `enqueue_extraction`'s best-effort `try/except` would swallow the
+  resulting RuntimeError, leaving the resume silently stuck at "queued".
+  Skill names are asserted as a set *equality*, not a subset — a subset
+  check would pass while the extractor invented a skill the document
+  never mentions, which is the one failure the Evidence-First rule
+  exists to prevent.
+
 <!-- Add new entries above this line, most recent first. -->
