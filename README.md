@@ -101,6 +101,25 @@ anyway. That final visual confirmation is a separate, manual step:
 Unlike the smoke test, these stay running until you stop them yourself
 (`make stop`, then `Ctrl-C` the other two).
 
+## Demo
+
+To show the resume-to-skills flow, generate the fictional sample resumes
+first — never demo with a real resume, your own included, since an upload
+stores the file on disk and its full extracted text in the database:
+
+```bash
+make sample-resumes
+```
+
+That writes three invented resumes (`example.com` addresses, `555-01xx`
+numbers, made-up employers) to `apps/api/var/samples/`. It writes **files
+only** — no users, no database rows — so the demo goes through the real
+upload → extraction → review path. `apps/api/var/` is gitignored, so a
+generated document cannot be committed.
+
+`docs/demo.md` is the full walkthrough: what to click, what to point out,
+and what the system deliberately refuses to infer.
+
 ## Authentication
 
 Email/password auth, under `/api/v1/auth`:

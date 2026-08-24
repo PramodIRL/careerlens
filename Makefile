@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills sample-resumes smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -17,6 +17,7 @@ help:
 	@echo "  make migration name=\"...\"  Create a new (blank) migration"
 	@echo "  make requeue-stuck-resumes  Re-enqueue resumes stuck in 'queued' (safe to re-run)"
 	@echo "  make seed-skills    Seed/update the canonical skill taxonomy (safe to re-run)"
+	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
 
 format:
@@ -92,6 +93,15 @@ requeue-stuck-resumes:
 # are never touched. See apps/api/scripts/seed_skills.py.
 seed-skills:
 	cd apps/api && uv run python -m scripts.seed_skills
+
+# Writes the fictional sample resumes (apps/api/scripts/sample_resumes.py)
+# to apps/api/var/samples/, so a demo never needs a real person's resume.
+# FILES ONLY: this writes nothing to the database and creates no users —
+# the demo goes through the real upload/extraction flow. The output
+# directory is inside the already-gitignored apps/api/var/, so a
+# generated document cannot be committed. Safe to re-run; overwrites.
+sample-resumes:
+	cd apps/api && uv run python -m scripts.sample_resumes
 
 smoke:
 	./scripts/smoke.sh
