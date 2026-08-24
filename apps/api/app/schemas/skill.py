@@ -67,11 +67,37 @@ class ExtractionMethod(StrEnum):
     docs/project-brief.md's Evidence-First rule: an LLM may later explain
     a persisted result, but must never be the thing that invented it.
     RESUME_ALIAS_MATCH is Prompt 2.4's boundary-aware taxonomy matching
-    (app/skill_matching.py) — no model inference anywhere in it.
+    (app/skill_matching.py) — no model inference anywhere in it, and the
+    four GITHUB_* members below run that SAME matcher over GitHub-sourced
+    strings rather than introducing a second one.
+
+    WHY GITHUB HAS FOUR VALUES AND NOT ONE. The evidence natural key is
+    (candidate_skill_id, source_type, source_identifier,
+    extraction_method), and GitHub evidence uses the repository's
+    "owner/repo" as its source_identifier — so `extraction_method` is the
+    only field distinguishing several signals coming from the SAME
+    repository. Collapsing them into one value would force an invented
+    precedence rule for which excerpt wins, and would merge facts that
+    are genuinely distinct: "Python is named in the README" and "Python
+    is 82% of this repository's bytes" are two observations, not one.
+
+    Adding these needs no migration — `skill_evidence.extraction_method`
+    is plain text with no database CHECK, exactly so a vocabulary can
+    grow without an ALTER TYPE (see this module's own docstring).
     """
 
     MANUAL_ENTRY = "manual_entry"
     RESUME_ALIAS_MATCH = "resume_alias_match"
+    # --- GitHub-derived (Prompt 3.3), one per distinct stored signal ---
+    GITHUB_README_MATCH = "github_readme_match"
+    GITHUB_DESCRIPTION_MATCH = "github_description_match"
+    GITHUB_TOPIC_MATCH = "github_topic_match"
+    # The only method that stores a NULL excerpt. A language is a
+    # computed byte statistic, not text anybody wrote, so there is
+    # nothing to quote — and inventing "Python (82,341 bytes)" would be
+    # authored prose presented as a quotation. The byte counts stay
+    # inspectable in github_repository_languages.
+    GITHUB_LANGUAGE_MATCH = "github_language_match"
 
 
 class CandidateSkillStatus(StrEnum):

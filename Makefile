@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills sample-resumes smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills sample-resumes smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -17,6 +17,7 @@ help:
 	@echo "  make migration name=\"...\"  Create a new (blank) migration"
 	@echo "  make requeue-stuck-resumes  Re-enqueue resumes stuck in 'queued' (safe to re-run)"
 	@echo "  make seed-skills    Seed/update the canonical skill taxonomy (safe to re-run)"
+	@echo "  make github-skills  Re-derive GitHub skill evidence from stored data (no GitHub calls)"
 	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
 
@@ -94,6 +95,16 @@ requeue-stuck-resumes:
 # are never touched. See apps/api/scripts/seed_skills.py.
 seed-skills:
 	cd apps/api && uv run python -m scripts.seed_skills
+
+# Re-derives GitHub-backed skill evidence for every connected user from
+# data ALREADY in Postgres — it makes no GitHub requests at all. Run this
+# after `make seed-skills` changes the taxonomy: the stored repositories
+# are still correct, only the derived evidence is stale, and re-importing
+# to fix that would re-spend ~42 of GitHub's 60-requests-per-hour budget.
+# Safe and deterministic to re-run; never changes a confirmed or rejected
+# decision. See apps/api/scripts/extract_github_skills.py.
+github-skills:
+	cd apps/api && uv run python -m scripts.extract_github_skills
 
 # Writes the fictional sample resumes (apps/api/scripts/sample_resumes.py)
 # to apps/api/var/samples/, so a demo never needs a real person's resume.

@@ -974,4 +974,157 @@ Add one entry per decision, most recent first.
   `last_seen_at` on the repository and `started_at`/`attempt_count` on
   the run.
 
+- **Date**: 2026-08-24
+- **Decision**: For GitHub-derived skill evidence (Prompt 3.3): a
+  separate database-only module (`app/github/skill_evidence.py`) invoked
+  best-effort from the existing ingestion Celery task after a run reaches
+  `succeeded` — NOT a second Celery task, and not code inside
+  `run_ingestion`. It reuses `find_skill_matches()` and the curated
+  taxonomy unchanged, adds four `ExtractionMethod` values, and needs no
+  migration.
+- **Problem**: Turn already-ingested repository data into evidence-backed
+  skills without a second matcher, a second taxonomy, or any inference —
+  and without the derived data being re-derivable only at the cost of
+  GitHub's rate-limit budget.
+- **Alternatives**: (1) Inline in `run_ingestion` — rejected: ingestion
+  makes network calls, pauses for an hour under rate limiting and commits
+  per repository, so a taxonomy change could only be reflected by
+  re-spending ~42 of GitHub's 60 requests/hour re-fetching data already in
+  Postgres, and a bug in skill code could drive `max_retries=None` GitHub
+  retries. (2) A second Celery task chained after ingestion — rejected:
+  `enqueue_*` is documented here as best-effort, so a second enqueue hop
+  doubles the "Redis blip silently strands work" exposure to buy
+  independent retry for an operation with nothing transient to retry.
+  (3) GitHub-specific confidence values — rejected as the forbidden new
+  ranking model; see the trade-off. (4) `github_repo_id` as
+  `source_identifier` — rejected: a bare integer is unreadable to a human
+  inspecting evidence, and `app/models/skill_evidence.py` already reserves
+  "owner/repo" for this source type.
+- **Trade-off**: **Confidence stays `CONFIDENCE_BY_KIND` unchanged**, so a
+  language match and a README match can score identically. Deliberate:
+  `confidence` answers "does this string denote this skill", not "how
+  strong is this as evidence of ability" — the second question is Prompt
+  4.x's, which already has `source_type` and `extraction_method` to weight
+  by. Folding source strength in now would pre-empt 4.x inside a column
+  Prompt 2.4 defined as a match-quality lookup. **Four extraction methods**
+  mean up to four evidence rows per skill per repository; bounded by 3.2's
+  20-repo cap, and worth it because `extraction_method` is the only field
+  distinguishing signals from the same repository — one value would force
+  an invented precedence rule for which excerpt wins. **Language evidence
+  stores `excerpt = NULL`**, which is less informative to a human skimming
+  but is the answer Prompt 2.3 pre-registered when it made the column
+  nullable "because some evidence has no quotable text at all (a GitHub
+  language statistic)": a language is a computed byte statistic, and
+  "Python (82,341 bytes)" would be authored prose presented as a
+  quotation. The byte counts stay inspectable in their own table.
+  **Reconciliation is a full user-scoped sweep**, more aggressive than the
+  resume path's narrow per-resume delete — justified because this
+  extractor genuinely speaks for the user's whole account rather than one
+  document, and guarded three ways (`source_type='github'`, user-scoped,
+  and only keys absent from a freshly computed desired set). **README
+  matching uses the truncated stored text**, so a skill mentioned only
+  past 20k characters is missed; `readme_truncated` records the loss.
+  **`source_identifier` is `String(255)` while `full_name` is
+  `String(400)`** — GitHub's real ceiling is 39 + 1 + 100 = 140, so this
+  is safe in practice but is a bounded assumption rather than a guarantee.
+- **Outcome**: Four signals, each matched INDIVIDUALLY: README,
+  description, one pass per topic, one pass per language (the union of
+  `github_repository_languages` and `primary_language`, which is a member
+  of that set rather than a separate signal — it is GitHub's own top entry
+  from the same breakdown, but it arrives in the LISTING, so it is the only
+  language signal available beyond the detail cap). Concatenating topics
+  before matching was tested and rejected: the matcher tolerates
+  whitespace between a term's parts, so topics ["unit", "testing"] joined
+  for one pass match the skill "Unit Testing", which neither topic
+  asserts — pinned by `test_topics_are_never_concatenated_before_matching`.
+  Forks excluded (their description and topics still come from the
+  listing, so the filter is load-bearing, not redundant with 3.2's);
+  archived repositories INCLUDED, because archiving says "no longer
+  maintained", not "not my work", and recency is 4.x's to weigh. Reruns
+  are exact no-ops, asserted on row ids and timestamps.
+  `scripts/extract_github_skills.py` / `make github-skills` re-derives for
+  every connected user at zero request cost — the payoff of the
+  separation. Covered by `tests/test_github_skill_evidence.py` (39),
+  `tests/test_github_skill_worker.py` (5) and two new disconnect tests in
+  `tests/test_github_connection_api.py`; 3.2's
+  `test_ingestion_writes_no_candidate_skills_or_evidence` is retained
+  unchanged and now proves the separation rather than merely documenting
+  3.2's scope.
+
+- **Date**: 2026-08-24
+- **Decision**: Disconnecting GitHub PURGES GitHub-derived skill
+  evidence, then removes only orphaned `suggested` candidate skills.
+- **Problem**: Prompt 3.1 deferred this to 3.3. `docs/decisions.md`
+  already accepts a dangling polymorphic reference for a deleted resume,
+  so the consistent-looking choice was to leave GitHub evidence too.
+- **Alternatives**: (1) Leave it dangling, matching the resume
+  precedent; (2) delete every candidate skill that had GitHub evidence,
+  reviewed or not.
+- **Trade-off**: The resume precedent does not transfer, and the
+  asymmetry is the whole argument: deleted-resume evidence is still
+  RECONCILABLE, because the resume extractor may run again — whereas after
+  a disconnect there is no connection and GitHub reconciliation will never
+  run again. Leaving it would strand the user with skills citing
+  repositories that no longer exist and no mechanism to remove them:
+  unrecoverable, not merely dangling. Option (2) was rejected because it
+  would silently discard a decision the user made by hand. The accepted
+  cost is that a confirmed skill can survive with zero evidence — the
+  existing, intended semantics (the user asserted it), identical to
+  today's behaviour after a resume is deleted.
+- **Outcome**: `purge_github_skill_evidence` is the same sweep as a
+  normal run with an empty desired set, so resume evidence, manual
+  evidence and every confirmed/rejected decision survive by construction
+  rather than by a special case. Pinned by
+  `test_disconnect_preserves_reviewed_skills_and_non_github_evidence`.
+
+- **Date**: 2026-08-24
+- **Decision**: The GitHub evidence reconciliation sweep keys on
+  `(candidate_skill_id, source_identifier, extraction_method)`, not on
+  `(source_identifier, extraction_method)`.
+- **Problem**: Found by a test, not by review. The first implementation
+  compared only the source and method, which reads correctly — until two
+  skills are matched from the SAME repository through the SAME signal
+  kind. They then share that pair, so as long as *any* skill still had,
+  say, topic evidence for `ada/project`, every stale topic row for that
+  repository survived the sweep. Reconciliation silently stopped working
+  for any repository supporting more than one skill through one signal —
+  which is the common case, not an edge case.
+- **Alternatives**: Comparing the full evidence natural key in SQL via a
+  tuple `NOT IN`; deleting and re-inserting all GitHub evidence each run.
+- **Trade-off**: The diff is computed in Python over an explicit id list
+  rather than as a SQL tuple `NOT IN`. The set is small and bounded by
+  construction (3.2 caps a user at 20 detail-fetched repositories, times
+  four methods, times a ~33-entry taxonomy), and for a DELETE, obviously
+  correct beats clever. Delete-and-reinsert was rejected outright: it
+  would churn `created_at` on every row every run, destroying the
+  idempotency guarantee this design is built around.
+- **Outcome**: `test_the_sweep_distinguishes_two_skills_from_one_signal`
+  is the regression test, deliberately written with three skills from one
+  repository's topics so it fails loudly against the old behaviour.
+
+- **Date**: 2026-08-24
+- **Decision**: Record — but do not fix — that an alias LONGER than its
+  own skill's canonical name always wins the match.
+- **Problem**: Discovered while writing Prompt 3.3's tests. A README
+  saying "FastAPI" produces alias confidence (0.75), not canonical
+  (0.90): `find_skill_matches` tries terms longest-first and each accepted
+  match claims its span, so the alias "fast api" (8 characters) is tried
+  before the canonical "FastAPI" (7) and the canonical spelling can never
+  be reached. Prompt 2.4's own docstring says "strongest kind wins", which
+  is true only among terms that do not overlap.
+- **Alternatives**: Order terms by match kind before length; compare kind
+  before honouring the span claim; drop the "fast api" alias.
+- **Trade-off**: This is pre-existing Prompt 2.4 behaviour affecting
+  resume extraction identically — 3.3 inherits it by reusing the matcher
+  unchanged, which was an explicit constraint of this slice. Fixing it
+  belongs in `app/skill_matching.py` and would change resume matching
+  results, so it is out of scope here. The practical impact is small: one
+  taxonomy entry is affected, and only its confidence, not whether the
+  skill is found.
+- **Outcome**: Pinned by
+  `test_a_longer_alias_outranks_its_own_canonical_name` so it is a known,
+  asserted property rather than a surprise, and
+  `test_readme_canonical_match` uses Docker (which has no aliases) for its
+  canonical assertion.
+
 <!-- Add new entries above this line, most recent first. -->

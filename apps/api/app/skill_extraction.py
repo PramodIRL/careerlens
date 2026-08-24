@@ -74,20 +74,25 @@ async def load_taxonomy_terms(db: AsyncSession) -> list[SkillTerm]:
     return terms
 
 
-async def _ensure_candidate_skills(
-    db: AsyncSession, user_id: uuid.UUID, skill_ids: set[uuid.UUID], summary: ExtractionSummary
-) -> dict[uuid.UUID, CandidateSkill]:
+async def ensure_candidate_skills(
+    db: AsyncSession, user_id: uuid.UUID, skill_ids: set[uuid.UUID]
+) -> tuple[dict[uuid.UUID, CandidateSkill], int]:
     """Insert a "suggested" row for any skill the user does not already
-    have, and return every relevant row keyed by skill id.
+    have. Returns (rows keyed by skill id, how many were created).
 
-    ON CONFLICT DO NOTHING rather than a plain insert: it is what
-    guarantees an existing row's status is untouched, and it also makes
-    two workers extracting two resumes for the same user concurrently
-    safe (the same reasoning as app/api/v1/profile.py's
-    `_get_or_create_skill`).
+    SOURCE-AGNOSTIC ON PURPOSE. Shared verbatim by resume extraction
+    (below) and GitHub extraction (app/github/skill_evidence.py) rather
+    than copied, because the ON CONFLICT DO NOTHING below IS the override
+    invariant: it is what guarantees an existing row's status is
+    untouched, so no automatic run can downgrade a "confirmed" skill or
+    resurrect a "rejected" one. Two copies of that would be two places
+    for the invariant to drift.
+
+    It also makes concurrent extraction for the same user safe (the same
+    reasoning as app/api/v1/profile.py's `_get_or_create_skill`).
     """
     if not skill_ids:
-        return {}
+        return {}, 0
 
     existing_before = set(
         (
@@ -118,7 +123,6 @@ async def _ensure_candidate_skills(
             .on_conflict_do_nothing(index_elements=["user_id", "skill_id"])
         )
         await db.flush()
-        summary.candidate_skills_created += len(missing)
 
     rows = (
         await db.scalars(
@@ -127,7 +131,40 @@ async def _ensure_candidate_skills(
             )
         )
     ).all()
-    return {row.skill_id: row for row in rows}
+    return {row.skill_id: row for row in rows}, len(missing)
+
+
+async def delete_orphaned_suggestions(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """Delete this user's UNREVIEWED candidate skills that no longer have
+    evidence from ANY source. Returns how many were removed.
+
+    SOURCE-AGNOSTIC, and deliberately so — this is the second half of the
+    override invariant, shared by resume and GitHub reconciliation. Two
+    properties make it safe to call from either:
+
+      * It only ever touches rows still in "suggested" state, so a
+        confirmed or rejected decision is never undone.
+      * It requires zero evidence from EVERY source, not just the source
+        that happens to be reconciling. So a skill the resume still
+        supports survives a GitHub sweep, a skill GitHub still supports
+        survives a resume rerun, and a manually added skill (which always
+        carries manual evidence) survives both.
+    """
+    orphaned = (
+        await db.scalars(
+            select(CandidateSkill.id)
+            .outerjoin(SkillEvidence, SkillEvidence.candidate_skill_id == CandidateSkill.id)
+            .where(
+                CandidateSkill.user_id == user_id,
+                CandidateSkill.status == CandidateSkillStatus.SUGGESTED.value,
+                SkillEvidence.id.is_(None),
+            )
+        )
+    ).all()
+    if not orphaned:
+        return 0
+    await db.execute(delete(CandidateSkill).where(CandidateSkill.id.in_(orphaned)))
+    return len(orphaned)
 
 
 async def _write_evidence(
@@ -189,8 +226,8 @@ async def _reconcile(
 
     Scoped hard, in two steps. First, delete only THIS resume's
     alias-match evidence for skills it no longer mentions — evidence
-    from another resume, from a manual entry, or from a future GitHub
-    ingestion is never touched. Second, delete only candidate skills
+    from another resume, from a manual entry, or from GitHub extraction
+    (Prompt 3.3) is never touched. Second, delete only candidate skills
     that are still "suggested" AND now have no evidence at all. A
     confirmed or rejected row survives regardless, and so does a
     manually added one (it always carries manual evidence).
@@ -207,20 +244,7 @@ async def _reconcile(
     removed = cast("CursorResult[Any]", await db.execute(stale_evidence))
     summary.evidence_removed += removed.rowcount or 0
 
-    orphaned = (
-        await db.scalars(
-            select(CandidateSkill.id)
-            .outerjoin(SkillEvidence, SkillEvidence.candidate_skill_id == CandidateSkill.id)
-            .where(
-                CandidateSkill.user_id == user_id,
-                CandidateSkill.status == CandidateSkillStatus.SUGGESTED.value,
-                SkillEvidence.id.is_(None),
-            )
-        )
-    ).all()
-    if orphaned:
-        await db.execute(delete(CandidateSkill).where(CandidateSkill.id.in_(orphaned)))
-        summary.suggestions_removed += len(orphaned)
+    summary.suggestions_removed += await delete_orphaned_suggestions(db, user_id)
 
 
 async def extract_skills_for_resume(db: AsyncSession, resume_id: uuid.UUID) -> ExtractionSummary:
@@ -249,9 +273,10 @@ async def extract_skills_for_resume(db: AsyncSession, resume_id: uuid.UUID) -> E
     matches = find_skill_matches(resume.extracted_text, terms)
     summary.skills_matched = len(matches)
 
-    by_skill = await _ensure_candidate_skills(
-        db, resume.user_id, {match.skill_id for match in matches}, summary
+    by_skill, created = await ensure_candidate_skills(
+        db, resume.user_id, {match.skill_id for match in matches}
     )
+    summary.candidate_skills_created += created
 
     matched_candidate_skill_ids: set[uuid.UUID] = set()
     for match in matches:
