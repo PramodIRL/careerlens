@@ -22,8 +22,14 @@ import {
   type SavedJobResponse,
 } from "@/lib/api-client";
 
+import JobMatchPanel from "./job-match-panel";
+
 interface JobsSectionProps {
   accessToken: string;
+  /** Bumped by the dashboard when candidate skills change, so each
+   * job's match score refetches. The score is derived server-side from
+   * current rows, so a stale panel is the only way it can be wrong. */
+  refreshKey?: number;
 }
 
 // Deliberately NOT wired into the dashboard's refresh counters. A saved
@@ -126,7 +132,10 @@ function formatDate(iso: string): string {
   });
 }
 
-export default function JobsSection({ accessToken }: JobsSectionProps) {
+export default function JobsSection({
+  accessToken,
+  refreshKey = 0,
+}: JobsSectionProps) {
   const [jobs, setJobs] = useState<SavedJobResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -505,6 +514,25 @@ export default function JobsSection({ accessToken }: JobsSectionProps) {
                     )}
                   </div>
                 </div>
+              )}
+
+              {editingId !== job.id && (
+                // Collapsed by default: a dashboard listing many jobs
+                // should not expand every score at once. Native
+                // <details> gives keyboard support and the expanded
+                // state announcement for free.
+                <details className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
+                  <summary className="cursor-pointer text-xs font-medium text-black dark:text-zinc-50">
+                    View match
+                  </summary>
+                  <div className="mt-2">
+                    <JobMatchPanel
+                      accessToken={accessToken}
+                      savedJobId={job.id}
+                      refreshKey={refreshKey}
+                    />
+                  </div>
+                </details>
               )}
             </li>
           ))}

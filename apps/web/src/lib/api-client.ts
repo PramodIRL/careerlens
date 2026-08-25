@@ -787,3 +787,85 @@ export async function importJobFromPdf(
   }
   return (await response.json()) as JobDraftResponse;
 }
+
+// --- Candidate <-> job matching (Prompt 4.3) -------------------------
+
+export type RequirementLevel = "required" | "preferred" | "mentioned";
+
+export interface MatchedEvidence {
+  source_type: string;
+  excerpt: string | null;
+  /** Match quality — "does this string denote this skill" — NOT a
+   * capability rating, and deliberately never multiplied into the
+   * score. Shown so a human can read it for what it is. */
+  confidence: number;
+}
+
+export interface LevelBreakdown {
+  matched: number;
+  total: number;
+}
+
+export interface MatchedSkill {
+  skill_id: string;
+  skill_name: string;
+  requirement_level: RequirementLevel;
+  /** The job's own words that produced this requirement. */
+  job_excerpt: string;
+  candidate_status: string;
+  /** True for a "suggested" skill: real evidence exists, the user just
+   * has not reviewed it. It still counts toward the score. */
+  candidate_unreviewed: boolean;
+  candidate_evidence: MatchedEvidence[];
+}
+
+export interface MissingSkill {
+  skill_id: string;
+  skill_name: string;
+  requirement_level: RequirementLevel;
+  job_excerpt: string;
+  /** Distinguishes "you rejected this" from "you don't have this" —
+   * very different messages for the user. */
+  candidate_rejected: boolean;
+}
+
+export interface JobMatchResponse {
+  /** Which arithmetic produced this score. A number without it cannot
+   * be reproduced. */
+  formula_version: string;
+  overall_score: number;
+  earned_weight: number;
+  obtainable_weight: number;
+  /** False when the job has no recognised skill requirements. The UI
+   * must then say "no skill requirements detected", NOT "0% match" —
+   * the first is about the job, the second about the candidate. */
+  has_requirements: boolean;
+  required_matched: number;
+  required_total: number;
+  by_level: Record<RequirementLevel, LevelBreakdown>;
+  weights: Record<RequirementLevel, number>;
+  matched_skills: MatchedSkill[];
+  missing_skills: MissingSkill[];
+  /** The subset of missing_skills the job marks required — the ones
+   * that actually block the candidate. Reported separately because the
+   * v1 formula applies no penalty for them. */
+  required_missing: MissingSkill[];
+}
+
+/** How well the authenticated candidate matches one of their own saved
+ * jobs. Recomputed server-side on every request from current rows, so
+ * confirming a skill or editing the description is reflected
+ * immediately — there is no stored score to go stale. */
+export async function getJobMatch(
+  accessToken: string,
+  savedJobId: string,
+): Promise<JobMatchResponse> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}/match`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as JobMatchResponse;
+}

@@ -345,3 +345,125 @@ class JobSkillRequirementResponse(BaseModel):
     extraction_method: RequirementExtractionMethod
     created_at: datetime
     updated_at: datetime
+
+
+# --------------------------------------------------------------------
+# Candidate <-> job matching (Prompt 4.3)
+#
+# READ-ONLY PRESENTATION MODELS. Nothing below is persisted: a match is
+# recomputed from current rows on every request. See
+# app/api/v1/saved_job.py.
+# --------------------------------------------------------------------
+
+
+class MatchedEvidenceResponse(BaseModel):
+    """One reason the candidate is credited with a skill.
+
+    A verbatim reference to an EXISTING `skill_evidence` row — the
+    matcher authors no evidence and persists no generated text.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    source_type: str
+    excerpt: str | None
+    confidence: float
+
+
+class LevelBreakdownResponse(BaseModel):
+    """Matched-out-of-total for one requirement level, so a client can
+    render "Required 4 / 5" without recomputing it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    matched: int
+    total: int
+
+
+class MatchedSkillResponse(BaseModel):
+    """A job requirement the candidate satisfies.
+
+    Carries enough to explain itself without a second request: which
+    skill, how strongly the job asks for it, the job's own words, the
+    candidate's review state, and the candidate-side evidence.
+
+    `candidate_unreviewed` is the `suggested` case surfaced explicitly.
+    It still counts toward the score — an extractor found real, persisted
+    evidence — but the client can prompt the user to confirm it rather
+    than presenting an unreviewed guess as settled fact.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    skill_id: UUID
+    skill_name: str
+    requirement_level: RequirementLevelSchema
+    # The job's own words that produced this requirement.
+    job_excerpt: str
+    # "confirmed" or "suggested" — never "rejected", which cannot match.
+    candidate_status: str
+    candidate_unreviewed: bool
+    candidate_evidence: list[MatchedEvidenceResponse] = []
+
+
+class MissingSkillResponse(BaseModel):
+    """A job requirement the candidate does not satisfy.
+
+    `candidate_rejected` distinguishes two very different situations that
+    would otherwise look identical: the candidate never had this skill,
+    versus the candidate explicitly disowned it. The UI can then say
+    "you rejected this" instead of "you don't have this" — and a
+    rejection is a tombstone, so it never counts as matched however much
+    stale evidence remains.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    skill_id: UUID
+    skill_name: str
+    requirement_level: RequirementLevelSchema
+    job_excerpt: str
+    candidate_rejected: bool
+
+
+class JobMatchResponse(BaseModel):
+    """How well the authenticated candidate matches one saved job.
+
+    NOT PERSISTED, and that is the design. A stored score would be a
+    cache with no invalidation trigger: confirming a skill, rejecting
+    one, or editing the job description would each silently stale it.
+    Recomputing from current rows means the next request is always
+    correct, with no "rebuild score" workflow to forget.
+
+    `formula_version` is returned because a score is meaningless without
+    knowing which arithmetic produced it — a screenshotted 77% cannot be
+    reproduced otherwise.
+
+    REQUIRED COVERAGE IS REPORTED SEPARATELY, on purpose. skill_match_v1
+    does not penalise or cap for missing required skills, so a job can
+    score well on weighted coverage while a hard requirement is unmet.
+    `required_matched` / `required_total` / `required_missing` are what
+    make that unmistakable rather than buried in one opaque number.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    formula_version: str
+    overall_score: int
+    earned_weight: int
+    obtainable_weight: int
+    # False when the job has no recognised skill requirements at all. A
+    # client must say "no skill requirements detected", NOT "0% match" —
+    # the first is a statement about the job, the second about the
+    # candidate, and they are not the same claim.
+    has_requirements: bool
+    required_matched: int
+    required_total: int
+    by_level: dict[str, LevelBreakdownResponse]
+    # Echoed so a reader can check the arithmetic by hand.
+    weights: dict[str, int]
+    matched_skills: list[MatchedSkillResponse] = []
+    missing_skills: list[MissingSkillResponse] = []
+    # The subset of missing_skills the job marks required — the ones
+    # that actually block the candidate.
+    required_missing: list[MissingSkillResponse] = []
