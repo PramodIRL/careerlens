@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pushMock = vi.fn();
@@ -14,6 +14,8 @@ const listResumesMock = vi.fn();
 const listCandidateSkillsMock = vi.fn();
 const getSkillProfileMock = vi.fn();
 const getGitHubConnectionMock = vi.fn();
+const deleteResumeMock = vi.fn();
+const disconnectGitHubMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -40,6 +42,8 @@ vi.mock("@/lib/api-client", async () => {
     getSkillProfile: (...args: unknown[]) => getSkillProfileMock(...args),
     getGitHubConnection: (...args: unknown[]) =>
       getGitHubConnectionMock(...args),
+    deleteResume: (...args: unknown[]) => deleteResumeMock(...args),
+    disconnectGitHub: (...args: unknown[]) => disconnectGitHubMock(...args),
   };
 });
 
@@ -96,6 +100,8 @@ beforeEach(() => {
   getGitHubConnectionMock.mockReset().mockResolvedValue(null);
   listCandidateSkillsMock.mockReset().mockResolvedValue([]);
   getSkillProfileMock.mockReset().mockResolvedValue(EMPTY_PROFILE);
+  deleteResumeMock.mockReset().mockResolvedValue(undefined);
+  disconnectGitHubMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("dashboard protected navigation", () => {
@@ -207,5 +213,73 @@ describe("dashboard refresh coordination", () => {
     await new Promise((resolve) => setTimeout(resolve, 2500));
 
     expect(listCandidateSkillsMock.mock.calls.length).toBe(skillsCalls);
+  }, 10000);
+});
+
+// --- removal propagates too (delete / disconnect) --------------------
+
+describe("dashboard refresh coordination on removal", () => {
+  beforeEach(() => {
+    refreshMock.mockResolvedValue({ access_token: "tok" });
+    getCurrentUserMock.mockResolvedValue(MOCK_USER);
+  });
+
+  const READY_RESUME = {
+    id: "r1",
+    original_filename: "cv.pdf",
+    content_type: "application/pdf",
+    file_size_bytes: 1024,
+    status: "succeeded" as const,
+    error_message: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+
+  it("refetches skills and profile when a resume is deleted", async () => {
+    listResumesMock.mockResolvedValue([READY_RESUME]);
+
+    renderDashboard();
+    await screen.findByText("cv.pdf");
+    const skillsBefore = listCandidateSkillsMock.mock.calls.length;
+    const profileBefore = getSkillProfileMock.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(listCandidateSkillsMock.mock.calls.length).toBeGreaterThan(
+        skillsBefore,
+      );
+      expect(getSkillProfileMock.mock.calls.length).toBeGreaterThan(
+        profileBefore,
+      );
+    });
+  }, 10000);
+
+  it("refetches skills and profile when GitHub is disconnected", async () => {
+    listResumesMock.mockResolvedValue([]);
+    getGitHubConnectionMock.mockResolvedValue({
+      username: "octocat",
+      github_user_id: 1,
+      public_repo_count: 3,
+      last_verified_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+
+    renderDashboard();
+    const button = await screen.findByRole("button", { name: "Disconnect" });
+    const skillsBefore = listCandidateSkillsMock.mock.calls.length;
+    const profileBefore = getSkillProfileMock.mock.calls.length;
+
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(listCandidateSkillsMock.mock.calls.length).toBeGreaterThan(
+        skillsBefore,
+      );
+      expect(getSkillProfileMock.mock.calls.length).toBeGreaterThan(
+        profileBefore,
+      );
+    });
   }, 10000);
 });

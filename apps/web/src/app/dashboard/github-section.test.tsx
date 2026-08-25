@@ -686,3 +686,44 @@ describe("github import completion notification", () => {
     expect(getLatestGitHubIngestionMock).not.toHaveBeenCalled();
   }, 10000);
 });
+
+// --- disconnect also notifies (a purge is not a status transition) ---
+
+describe("github disconnect notification", () => {
+  it("notifies on disconnect, so the skill sections refetch", async () => {
+    // Disconnecting purges the GitHub-derived skill evidence. The
+    // terminal-edge effect cannot see this: it fires on a run's status
+    // TRANSITION, and disconnect sets `run` to null, which that guard
+    // ignores by design.
+    const onWorkComplete = vi.fn();
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock.mockResolvedValue(
+      run({ status: "succeeded" }),
+    );
+    listGitHubRepositoriesMock.mockResolvedValue([repository()]);
+    disconnectGitHubMock.mockResolvedValue(undefined);
+
+    renderSection(onWorkComplete);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not notify when the disconnect fails", async () => {
+    const onWorkComplete = vi.fn();
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock.mockResolvedValue(
+      run({ status: "succeeded" }),
+    );
+    listGitHubRepositoriesMock.mockResolvedValue([repository()]);
+    disconnectGitHubMock.mockRejectedValue(
+      new ApiError(503, "service unavailable"),
+    );
+
+    renderSection(onWorkComplete);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(onWorkComplete).not.toHaveBeenCalled();
+  });
+});

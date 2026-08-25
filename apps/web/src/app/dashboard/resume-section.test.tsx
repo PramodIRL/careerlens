@@ -294,3 +294,50 @@ describe("resume completion notification", () => {
     expect(listResumesMock).not.toHaveBeenCalled();
   }, 10000);
 });
+
+// --- deletion also notifies (removal is not a status transition) -----
+
+describe("resume deletion notification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const ready = {
+    ...RESUME_A,
+    status: "succeeded" as const,
+    error_message: null,
+  };
+
+  it("notifies when a resume is deleted, so the skill sections refetch", async () => {
+    // Deleting a resume removes its skill evidence server-side. The
+    // terminal-edge effect cannot see this: it looks for a status
+    // transition on a resume that still exists, and this one is gone
+    // from the list entirely.
+    const onWorkComplete = vi.fn();
+    listResumesMock.mockResolvedValue([ready]);
+    deleteResumeMock.mockResolvedValue(undefined);
+
+    renderSection(onWorkComplete);
+    await screen.findByText(RESUME_A.original_filename);
+    expect(onWorkComplete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not notify when the delete fails", async () => {
+    // Nothing changed server side, so a refetch would be pure waste.
+    const onWorkComplete = vi.fn();
+    listResumesMock.mockResolvedValue([ready]);
+    deleteResumeMock.mockRejectedValue(new Error("nope"));
+
+    renderSection(onWorkComplete);
+    await screen.findByText(RESUME_A.original_filename);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(onWorkComplete).not.toHaveBeenCalled();
+  });
+});

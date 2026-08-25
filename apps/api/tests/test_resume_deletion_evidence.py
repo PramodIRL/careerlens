@@ -551,3 +551,42 @@ def test_deletion_is_atomic_with_the_resume_row(client: TestClient) -> None:
         return resumes, evidence
 
     assert _run(_both) == (0, 0)
+
+
+def test_a_confirmed_skill_keeps_its_manual_evidence_after_the_resume_goes(
+    client: TestClient,
+) -> None:
+    """The exact combination clarified from browser testing.
+
+    A skill the resume suggested, that the user then confirmed AND
+    asserted by hand, must survive its source document being deleted:
+    the resume citation disappears, "Added by you" remains, and the
+    confirmed decision is untouched. A confirmed skill is allowed to
+    stand on the user's own word alone.
+    """
+    _seed_taxonomy()
+    token, user_id = _new_user(client)
+    resume_id = _upload(client, token)
+    _attach_evidence(
+        user_id,
+        "Python",
+        source_type="resume",
+        source_identifier=resume_id,
+        extraction_method="resume_alias_match",
+        excerpt="Languages: Python",
+    )
+    _attach_evidence(
+        user_id,
+        "Python",
+        source_type="manual",
+        source_identifier=user_id,
+        extraction_method="manual_entry",
+    )
+    _set_status(user_id, "Python", "confirmed")
+
+    assert _delete(client, token, resume_id).status_code == 204
+
+    # Resume citation gone, the user's own assertion intact...
+    assert _evidence(user_id) == [("manual", user_id)]
+    # ...and the decision is untouched.
+    assert _status_of(user_id, "Python") == "confirmed"
