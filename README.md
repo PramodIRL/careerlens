@@ -120,6 +120,19 @@ generated document cannot be committed.
 `docs/demo.md` is the full walkthrough: what to click, what to point out,
 and what the system deliberately refuses to infer.
 
+`docs/phase-4-acceptance.md` is the whole-MVP walkthrough — resume,
+GitHub, saved jobs, match, gaps and the mutations that update them — with
+the score worked out by hand so a viewer can check it, plus the Phase 4
+release checklist. Its GitHub half needs no real account:
+
+```bash
+make demo-github EMAIL=ada.sample@example.com
+```
+
+That imports a fictional account (`apps/api/scripts/sample_github.py`)
+through the real ingestion pipeline, making no network request. The user
+must already exist — the script will not create one.
+
 ## GitHub connection
 
 A candidate can connect a **public** GitHub username, under
