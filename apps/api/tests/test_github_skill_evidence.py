@@ -1017,3 +1017,43 @@ async def test_purge_preserves_reviewed_skills_and_other_sources(db: AsyncSessio
     assert [e.source_type for e in await _evidence_for(db, user_id, "Kubernetes")] == [
         EvidenceSourceType.MANUAL.value
     ]
+
+
+@pytest.mark.anyio
+async def test_a_confirmed_skill_keeps_its_manual_evidence_after_a_purge(
+    db: AsyncSession,
+) -> None:
+    """The GitHub mirror of the resume-deletion case clarified from
+    browser testing.
+
+    A skill GitHub evidenced, that the user then confirmed AND asserted
+    by hand, must survive disconnecting: the repository citation
+    disappears, "Added by you" remains, and the confirmed decision is
+    untouched.
+    """
+    user_id = await _seeded_user(db)
+    await _add_repository(db, user_id, full_name="ada/toolkit", languages={"Python": 500})
+    await extract_github_skill_evidence(db, user_id)
+
+    python = await _candidate_skill_for(db, user_id, "Python")
+    assert python is not None
+    python.status = CandidateSkillStatus.CONFIRMED.value
+    await db.commit()
+    await _add_manual_evidence(db, python.id, user_id)
+    assert {e.source_type for e in await _evidence_for(db, user_id, "Python")} == {
+        EvidenceSourceType.GITHUB.value,
+        EvidenceSourceType.MANUAL.value,
+    }
+
+    await purge_github_skill_evidence(db, user_id)
+    await db.commit()
+
+    db.expire_all()
+    # GitHub citation gone, the user's own assertion intact...
+    assert [e.source_type for e in await _evidence_for(db, user_id, "Python")] == [
+        EvidenceSourceType.MANUAL.value
+    ]
+    # ...and the decision is untouched.
+    still = await _candidate_skill_for(db, user_id, "Python")
+    assert still is not None
+    assert still.status == CandidateSkillStatus.CONFIRMED.value

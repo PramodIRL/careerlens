@@ -299,6 +299,16 @@ export default function GitHubSection({
       // the connection, so the view must not keep showing them.
       setRun(null);
       setRepositories([]);
+      // Disconnecting also purges the GitHub-derived skill evidence
+      // (app/api/v1/github_connection.py), so the skill sections are
+      // stale. Manual and resume evidence survive that purge, and a
+      // confirmed skill keeps its decision — the sections simply need to
+      // re-read what is left.
+      //
+      // Explicit for the same reason as the resume delete: the effect
+      // below fires on a run's status TRANSITION, and this sets `run` to
+      // null, which that guard deliberately ignores.
+      onWorkComplete?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "something went wrong");
     } finally {

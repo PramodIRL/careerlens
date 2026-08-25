@@ -180,7 +180,19 @@ export default function ResumeSection({
     try {
       await deleteResume(accessToken, id);
       setResumes((prev) => prev.filter((resume) => resume.id !== id));
+      // Deleting a resume removes the skill evidence it produced
+      // (app/api/v1/resume.py, in the same transaction), so the skill
+      // sections are now stale and must refetch.
+      //
+      // This has to be an EXPLICIT call: the effect below detects a
+      // status TRANSITION on a resume that still exists, and a deleted
+      // resume is gone from the list entirely, so no predicate over
+      // `resumes` can ever observe it. Completion and removal are two
+      // different events; only the first is a state change.
+      onWorkComplete?.();
     } catch (err) {
+      // Deliberately not notified on failure: nothing changed server
+      // side, so a refetch would be pure waste.
       setError(err instanceof ApiError ? err.message : "something went wrong");
     }
   }
