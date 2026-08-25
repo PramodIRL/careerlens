@@ -34,70 +34,33 @@ from app.schemas.resume import ResumeResponse, ResumeStatus
 from app.settings import get_settings
 from app.skill_extraction import remove_resume_skill_evidence
 from app.storage import ResumeStorage, get_resume_storage
+from app.uploads import RESUME_EXTENSIONS, validate_upload
 from app.worker import enqueue_extraction
 
 router = APIRouter()
 
-_PDF_CONTENT_TYPE = "application/pdf"
-_DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-
-# Real file-signature ("magic number") bytes — checked against the
-# actual uploaded content, not just the filename or the client-declared
-# Content-Type header, both of which are trivially spoofable (e.g.
-# renaming evil.exe to resume.pdf). PDFs start with "%PDF-"; DOCX files
-# are ZIP containers (OOXML) and start with the ZIP local-file-header
-# signature.
-_PDF_MAGIC = b"%PDF-"
-_DOCX_MAGIC = b"PK\x03\x04"
-
-_ALLOWED_EXTENSIONS: dict[str, str] = {".pdf": _PDF_CONTENT_TYPE, ".docx": _DOCX_CONTENT_TYPE}
-_MAGIC_BYTES: dict[str, bytes] = {_PDF_CONTENT_TYPE: _PDF_MAGIC, _DOCX_CONTENT_TYPE: _DOCX_MAGIC}
-
-_MAX_FILENAME_LENGTH = 255
 _NOT_YOUR_RESUME = "not authorized to access this resume"
 _NOT_FOUND = "resume not found"
 
-
-def _reject(detail: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+# Validation moved to app/uploads.py in Prompt 4.1b so the job-PDF import
+# runs the SAME checks rather than a second copy of them. Behaviour here
+# is unchanged: the same extensions, the same magic bytes, the same
+# messages, the same reject-before-persist ordering.
+_ALLOWED_EXTENSIONS = RESUME_EXTENSIONS
+_TYPE_ERROR = "only .pdf and .docx files are supported"
 
 
 def _validate_upload(
     filename: str | None, declared_content_type: str | None, content: bytes, max_size_bytes: int
 ) -> str:
-    """Runs every Prompt 2.1 validation check and returns the canonical
-    (validated) content type on success. Raises HTTPException(422) with
-    a clear reason on the first failing check — nothing is persisted or
-    written to storage before this returns successfully.
-
-    Filename safety is checked first: it's a prerequisite for safely
-    reading an extension off the filename at all, not because it's more
-    important than the other checks."""
-    if filename is None or not filename.strip():
-        raise _reject("filename is required")
-    name = filename.strip()
-    if len(name) > _MAX_FILENAME_LENGTH:
-        raise _reject(f"filename must be at most {_MAX_FILENAME_LENGTH} characters")
-    if "/" in name or "\\" in name or "\x00" in name:
-        raise _reject("filename contains invalid characters")
-
-    extension = FilePath(name).suffix.lower()
-    expected_content_type = _ALLOWED_EXTENSIONS.get(extension)
-    if expected_content_type is None:
-        raise _reject("only .pdf and .docx files are supported")
-
-    if declared_content_type != expected_content_type:
-        raise _reject("file content type does not match its extension")
-
-    if len(content) == 0:
-        raise _reject("file is empty")
-    if len(content) > max_size_bytes:
-        raise _reject(f"file exceeds the {max_size_bytes} byte size limit")
-
-    if not content.startswith(_MAGIC_BYTES[expected_content_type]):
-        raise _reject("file content does not match its declared type")
-
-    return expected_content_type
+    return validate_upload(
+        filename,
+        declared_content_type,
+        content,
+        max_size_bytes,
+        allowed=_ALLOWED_EXTENSIONS,
+        type_error=_TYPE_ERROR,
+    )
 
 
 async def _get_owned_resume(db: AsyncSession, resume_id: uuid.UUID, current_user: User) -> Resume:

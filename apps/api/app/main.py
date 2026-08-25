@@ -8,6 +8,7 @@ from app.api.v1.candidate_skill import router as candidate_skill_router
 from app.api.v1.github_connection import router as github_connection_router
 from app.api.v1.github_ingestion import router as github_ingestion_router
 from app.api.v1.health import router as health_router
+from app.api.v1.job_import import router as job_import_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.resume import router as resume_router
 from app.api.v1.saved_job import router as saved_job_router
@@ -55,6 +56,9 @@ app.include_router(resume_router, prefix="/api/v1/resumes")
 # Prompt 4.1 — user-owned saved job descriptions. Inert storage: no
 # skill extraction (4.2) and no matching (4.3) happen here.
 app.include_router(saved_job_router, prefix="/api/v1/saved-jobs")
+# Prompt 4.1b — PDF import produces an editable DRAFT and persists
+# nothing. Only the saved-jobs router above creates a row.
+app.include_router(job_import_router, prefix="/api/v1/job-imports")
 app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
 # Prompt 3.4 — the READ-ONLY presentation view over the same two tables
 # the candidate-skill routes above mutate. A separate prefix, not an

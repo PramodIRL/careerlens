@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     # attempts in the same way — see app/github/ingestion.py.
     github_ingestion_max_retries: int = 2
 
+    # --- Job import (Prompt 4.1b) ------------------------------------
+    # Job description PDFs are parsed in-request and discarded, never
+    # stored. Same default as the resume limit for consistency, but its
+    # own setting so the two can diverge.
+    job_pdf_max_size_bytes: int = 5 * 1024 * 1024
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""

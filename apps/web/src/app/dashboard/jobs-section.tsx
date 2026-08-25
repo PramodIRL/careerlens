@@ -1,14 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 
 import {
   ApiError,
   createSavedJob,
   deleteSavedJob,
+  importJobFromPdf,
   listSavedJobs,
   updateSavedJob,
   type EmploymentType,
+  type JobDraftResponse,
   type SavedJobCreateRequest,
   type SavedJobResponse,
 } from "@/lib/api-client";
@@ -40,6 +49,31 @@ const EMPLOYMENT_LABELS: Record<EmploymentType, string> = {
 };
 
 const MAX_DESCRIPTION_LENGTH = 60_000;
+
+// Two ways in, ONE form out. A PDF import does not save anything: it
+// populates this same editable form as a draft, and the user's own
+// "Save job" click is what creates the row. That is why manual entry is
+// the fallback rather than a parallel implementation — there is only one
+// form and one save.
+type InputMode = "manual" | "pdf";
+
+const MODES: { value: InputMode; label: string }[] = [
+  { value: "manual", label: "Paste manually" },
+  { value: "pdf", label: "Upload PDF" },
+];
+
+/** A draft is only ever a starting point for the form. Nulls become
+ * empty boxes for the user to fill — never invented values. */
+function draftToFormValues(draft: JobDraftResponse): JobFormValues {
+  return {
+    company: draft.company ?? "",
+    title: draft.title ?? "",
+    location: draft.location ?? "",
+    employment_type: draft.employment_type ?? "",
+    source_url: draft.source_url ?? "",
+    description: draft.description,
+  };
+}
 
 interface JobFormValues {
   company: string;
@@ -101,6 +135,12 @@ export default function JobsSection({ accessToken }: JobsSectionProps) {
   // control — the duplicate-submit guard this section needs, and the
   // same pattern ProfileForm and SkillsSection use.
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState<InputMode>("manual");
+  const [importing, setImporting] = useState(false);
+  // Set once an import populates the form, so the user is told to check
+  // the fields rather than being handed pre-filled data silently.
+  const [draftNotes, setDraftNotes] = useState<string[] | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<JobFormValues>(EMPTY_FORM);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -141,6 +181,40 @@ export default function JobsSection({ accessToken }: JobsSectionProps) {
     };
   }, [accessToken]);
 
+  /** Both importers share this: on success the draft becomes the form's
+   * values and the user reviews it; on failure we say why and leave
+   * them in the manual form, which is the fallback by construction. */
+  function applyDraft(draft: JobDraftResponse) {
+    setValues(draftToFormValues(draft));
+    setDraftNotes(draft.notes.length > 0 ? draft.notes : []);
+    setMode("manual");
+  }
+
+  function failImport(err: unknown) {
+    setError(err instanceof ApiError ? err.message : "something went wrong");
+    // Drop the user into the manual form rather than stranding them in a
+    // path that just failed.
+    setMode("manual");
+    setDraftNotes(null);
+  }
+
+  async function handlePdfImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || importing) return;
+
+    setImporting(true);
+    setError(null);
+    try {
+      applyDraft(await importJobFromPdf(accessToken, file));
+    } catch (err) {
+      failImport(err);
+    } finally {
+      setImporting(false);
+      // Reset so picking the same file again still fires onChange.
+      if (pdfInputRef.current) pdfInputRef.current.value = "";
+    }
+  }
+
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     if (saving) return;
@@ -151,6 +225,7 @@ export default function JobsSection({ accessToken }: JobsSectionProps) {
       const created = await createSavedJob(accessToken, toRequest(values));
       setJobs((prev) => [created, ...prev]);
       setValues(EMPTY_FORM);
+      setDraftNotes(null);
     } catch (err) {
       // A 422 here is the API's own validation message (a bad URL, an
       // over-long description), which is the useful thing to show.
@@ -221,6 +296,83 @@ export default function JobsSection({ accessToken }: JobsSectionProps) {
         >
           {error}
         </p>
+      )}
+
+      {/* A radiogroup, not three buttons: this is one choice among
+          mutually exclusive options, which is what arrow-key navigation
+          and the announced "1 of 3" position depend on. */}
+      <div
+        role="radiogroup"
+        aria-label="How do you want to add a job?"
+        className="flex flex-wrap gap-2"
+      >
+        {MODES.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={mode === option.value}
+            disabled={importing}
+            onClick={() => {
+              setMode(option.value);
+              setError(null);
+            }}
+            className={
+              mode === option.value
+                ? "rounded bg-black px-3 py-1 text-sm text-white dark:bg-white dark:text-black"
+                : "rounded border border-zinc-300 px-3 py-1 text-sm text-black disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50"
+            }
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "pdf" && (
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="import-pdf"
+            className="text-sm font-medium text-black dark:text-zinc-50"
+          >
+            Job description PDF
+          </label>
+          <input
+            id="import-pdf"
+            ref={pdfInputRef}
+            type="file"
+            accept=".pdf,application/pdf"
+            disabled={importing}
+            onChange={handlePdfImport}
+            aria-describedby="import-pdf-hint"
+            className="rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          />
+          <p
+            id="import-pdf-hint"
+            className="text-xs text-zinc-500 dark:text-zinc-500"
+          >
+            {importing
+              ? "Reading your PDF…"
+              : "PDF only. We read the text, show you a draft, and do not keep the file."}
+          </p>
+        </div>
+      )}
+
+      {mode === "manual" && draftNotes !== null && (
+        // Shown only after an import populated the form, so the user
+        // knows these values came from a machine and need checking.
+        <div
+          role="status"
+          className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-200"
+        >
+          <p className="font-medium">Check these details before saving.</p>
+          {draftNotes.length > 0 && (
+            <ul className="mt-1 list-disc pl-4">
+              {draftNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <form onSubmit={handleCreate} className="flex flex-col gap-3">

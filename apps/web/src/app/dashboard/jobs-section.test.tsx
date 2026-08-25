@@ -11,6 +11,7 @@ const listSavedJobsMock = vi.fn();
 const createSavedJobMock = vi.fn();
 const updateSavedJobMock = vi.fn();
 const deleteSavedJobMock = vi.fn();
+const importJobFromPdfMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -23,6 +24,7 @@ vi.mock("@/lib/api-client", async () => {
     createSavedJob: (...args: unknown[]) => createSavedJobMock(...args),
     updateSavedJob: (...args: unknown[]) => updateSavedJobMock(...args),
     deleteSavedJob: (...args: unknown[]) => deleteSavedJobMock(...args),
+    importJobFromPdf: (...args: unknown[]) => importJobFromPdfMock(...args),
   };
 });
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   createSavedJobMock.mockReset();
   updateSavedJobMock.mockReset();
   deleteSavedJobMock.mockReset();
+  importJobFromPdfMock.mockReset();
 });
 
 // --- loading / empty / list ------------------------------------------
@@ -420,5 +423,185 @@ describe("manual refresh", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     expect(screen.queryByText(/loading saved jobs/i)).not.toBeInTheDocument();
+  });
+});
+
+// --- three input paths (Prompt 4.1b) ---------------------------------
+
+function draft(overrides: Record<string, unknown> = {}) {
+  return {
+    company: "Fictional Widgets Ltd",
+    title: "Backend Engineer",
+    location: "Springfield",
+    employment_type: "full_time" as const,
+    source_url: "https://example.com/j/1",
+    description: "Build and test internal web services with Python.",
+    notes: [],
+    ...overrides,
+  };
+}
+
+async function chooseMode(name: string) {
+  fireEvent.click(await screen.findByRole("radio", { name }));
+}
+
+describe("input mode switcher", () => {
+  it("offers both paths as one accessible choice", async () => {
+    renderSection();
+    const group = await screen.findByRole("radiogroup", {
+      name: "How do you want to add a job?",
+    });
+    const options = within(group).getAllByRole("radio");
+    expect(options.map((o) => o.textContent)).toEqual([
+      "Paste manually",
+      "Upload PDF",
+    ]);
+  });
+
+  it("starts on manual, so the existing flow is the default", async () => {
+    renderSection();
+    expect(
+      await screen.findByRole("radio", { name: "Paste manually" }),
+    ).toHaveAttribute("aria-checked", "true");
+    // The manual form is present and no importer is.
+    expect(screen.getByLabelText("Job description")).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Job description PDF"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("expands only the selected path", async () => {
+    renderSection();
+    await chooseMode("Upload PDF");
+
+    expect(screen.getByLabelText("Job description PDF")).toBeInTheDocument();
+    // The review form stays visible: a PDF draft lands in it, so the two
+    // paths share one form rather than replacing each other.
+    expect(screen.getByLabelText("Job description")).toBeInTheDocument();
+
+    await chooseMode("Paste manually");
+    expect(
+      screen.queryByLabelText("Job description PDF"),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("import from pdf", () => {
+  function pdfFile() {
+    return new File(["%PDF-1.4 fake"], "job.pdf", { type: "application/pdf" });
+  }
+
+  it("accepts only pdf files at the picker", async () => {
+    renderSection();
+    await chooseMode("Upload PDF");
+
+    expect(screen.getByLabelText("Job description PDF")).toHaveAttribute(
+      "accept",
+      ".pdf,application/pdf",
+    );
+  });
+
+  it("fills the review form from the extracted draft without saving", async () => {
+    importJobFromPdfMock.mockResolvedValue(
+      draft({
+        company: null,
+        title: null,
+        location: null,
+        employment_type: null,
+        source_url: null,
+        notes: [
+          "We read the description from your PDF. Add the company, job title and location below.",
+        ],
+      }),
+    );
+    renderSection();
+    await chooseMode("Upload PDF");
+
+    fireEvent.change(screen.getByLabelText("Job description PDF"), {
+      target: { files: [pdfFile()] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Job description")).toHaveValue(
+        "Build and test internal web services with Python.",
+      ),
+    );
+    expect(screen.getByLabelText("Company")).toHaveValue("");
+    expect(
+      await screen.findByText(/Add the company, job title/),
+    ).toBeInTheDocument();
+    expect(createSavedJobMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to manual entry when the pdf cannot be read", async () => {
+    importJobFromPdfMock.mockRejectedValue(
+      new ApiError(422, "we could not read any text from that PDF"),
+    );
+    renderSection();
+    await chooseMode("Upload PDF");
+
+    fireEvent.change(screen.getByLabelText("Job description PDF"), {
+      target: { files: [pdfFile()] },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "we could not read any text from that PDF",
+    );
+    expect(
+      screen.getByRole("radio", { name: "Paste manually" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+});
+
+describe("both paths converge", () => {
+  function pdfFile() {
+    return new File(["%PDF-1.4 fake"], "job.pdf", { type: "application/pdf" });
+  }
+
+  it("saves an imported draft through the same endpoint as manual entry", async () => {
+    importJobFromPdfMock.mockResolvedValue(draft());
+    createSavedJobMock.mockResolvedValue(job({ title: "Backend Engineer" }));
+    renderSection();
+    await chooseMode("Upload PDF");
+    fireEvent.change(screen.getByLabelText("Job description PDF"), {
+      target: { files: [pdfFile()] },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Company")).toHaveValue(
+        "Fictional Widgets Ltd",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save job" }));
+
+    // The SAME create call the manual path makes — one persistence path.
+    await waitFor(() => expect(createSavedJobMock).toHaveBeenCalledTimes(1));
+    expect(createSavedJobMock).toHaveBeenCalledWith(ACCESS_TOKEN, {
+      company: "Fictional Widgets Ltd",
+      title: "Backend Engineer",
+      description: "Build and test internal web services with Python.",
+      location: "Springfield",
+      employment_type: "full_time",
+      source_url: "https://example.com/j/1",
+    });
+  });
+
+  it("clears the review notice after a successful save", async () => {
+    importJobFromPdfMock.mockResolvedValue(draft());
+    createSavedJobMock.mockResolvedValue(job());
+    renderSection();
+    await chooseMode("Upload PDF");
+    fireEvent.change(screen.getByLabelText("Job description PDF"), {
+      target: { files: [pdfFile()] },
+    });
+    await screen.findByText(/check these details before saving/i);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save job" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/check these details before saving/i),
+      ).not.toBeInTheDocument(),
+    );
   });
 });
