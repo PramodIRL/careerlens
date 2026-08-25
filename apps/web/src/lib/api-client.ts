@@ -869,3 +869,64 @@ export async function getJobMatch(
   }
   return (await response.json()) as JobMatchResponse;
 }
+
+// --- Explainable skill gaps (Prompt 4.4) -----------------------------
+
+export interface GapEntry {
+  skill_id: string;
+  skill_name: string;
+  requirement_level: RequirementLevel;
+  /** The job's own words that produced this requirement. */
+  job_excerpt: string;
+  /** "confirmed" / "suggested" / "rejected", or null when the candidate
+   * has no row for this skill at all — a different thing from a row
+   * that says "rejected". */
+  candidate_status: string | null;
+  /** Real stored evidence for needs-confirmation and rejected entries.
+   * Empty for genuinely missing skills — never a generated sentence. */
+  candidate_evidence: MatchedEvidence[];
+}
+
+export interface GapTotals {
+  required_gaps: number;
+  preferred_gaps: number;
+  informational_gaps: number;
+  needs_confirmation: number;
+  rejected_requirements: number;
+  satisfied: number;
+  total_requirements: number;
+}
+
+/** Explainable skill gaps for one saved job.
+ *
+ * FIVE BUCKETS, not one "missing" list. "We found nothing", "you told us
+ * this is not yours", and "we found evidence you have not reviewed" are
+ * different things to tell a person. */
+export interface JobGapResponse {
+  /** Separate from skill_match_v1: the bucketing policy can change
+   * without implying the score formula did. */
+  formula_version: string;
+  required_gaps: GapEntry[];
+  preferred_gaps: GapEntry[];
+  informational_gaps: GapEntry[];
+  needs_confirmation: GapEntry[];
+  rejected_requirements: GapEntry[];
+  totals: GapTotals;
+}
+
+/** Recomputed server-side on every request from current rows, so
+ * confirming a skill or editing the description is reflected
+ * immediately — there is no stored gap to go stale. */
+export async function getJobGaps(
+  accessToken: string,
+  savedJobId: string,
+): Promise<JobGapResponse> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}/gaps`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as JobGapResponse;
+}

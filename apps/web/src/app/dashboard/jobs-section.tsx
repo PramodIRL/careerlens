@@ -22,6 +22,7 @@ import {
   type SavedJobResponse,
 } from "@/lib/api-client";
 
+import JobGapPanel from "./job-gap-panel";
 import JobMatchPanel from "./job-match-panel";
 
 interface JobsSectionProps {
@@ -525,12 +526,26 @@ export default function JobsSection({
                   <summary className="cursor-pointer text-xs font-medium text-black dark:text-zinc-50">
                     View match
                   </summary>
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-col gap-3">
                     <JobMatchPanel
                       accessToken={accessToken}
                       savedJobId={job.id}
                       refreshKey={refreshKey}
                     />
+                    {/* Gaps live beside the score in the same
+                        disclosure: "how well do I match" and "what am I
+                        missing" are two readings of one answer, and both
+                        come from the same shared resolver server-side. */}
+                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                      <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
+                        Skill gaps
+                      </h4>
+                      <JobGapPanel
+                        accessToken={accessToken}
+                        savedJobId={job.id}
+                        refreshKey={refreshKey}
+                      />
+                    </div>
                   </div>
                 </details>
               )}
