@@ -345,3 +345,121 @@ describe("evidence wording", () => {
     expect(screen.queryByText(/user-1/)).not.toBeInTheDocument();
   });
 });
+
+// --- auto-refresh coordination ---------------------------------------
+
+describe("skills auto-refresh", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addCandidateSkillMock.mockReset();
+    updateCandidateSkillStatusMock.mockReset();
+  });
+
+  it("refetches exactly once when refreshKey changes", async () => {
+    listCandidateSkillsMock.mockResolvedValue([candidateSkill()]);
+    const { rerender } = render(
+      <SkillsSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await screen.findByText("Python");
+    expect(listCandidateSkillsMock).toHaveBeenCalledTimes(1);
+
+    rerender(<SkillsSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+
+    await waitFor(() =>
+      expect(listCandidateSkillsMock).toHaveBeenCalledTimes(2),
+    );
+    // A re-render WITHOUT a key change must not refetch again.
+    rerender(<SkillsSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(listCandidateSkillsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not show the loading skeleton during a background refetch", async () => {
+    listCandidateSkillsMock.mockResolvedValue([candidateSkill()]);
+    const { rerender } = render(
+      <SkillsSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await screen.findByText("Python");
+
+    rerender(<SkillsSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+
+    // The already-rendered list stays on screen throughout.
+    expect(screen.queryByText(/Loading skills/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Python")).toBeInTheDocument();
+  });
+
+  it("keeps the last good data when a background refetch fails", async () => {
+    listCandidateSkillsMock
+      .mockResolvedValueOnce([candidateSkill()])
+      .mockRejectedValueOnce(new Error("network"));
+    const { rerender } = render(
+      <SkillsSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await screen.findByText("Python");
+
+    rerender(<SkillsSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+
+    await waitFor(() =>
+      expect(listCandidateSkillsMock).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.getByText("Python")).toBeInTheDocument();
+  });
+
+  it("notifies onChanged after confirming, without refetching itself", async () => {
+    const onChanged = vi.fn();
+    listCandidateSkillsMock.mockResolvedValue([candidateSkill()]);
+    updateCandidateSkillStatusMock.mockResolvedValue(
+      candidateSkill({ status: "confirmed" as const }),
+    );
+    render(<SkillsSection accessToken={ACCESS_TOKEN} onChanged={onChanged} />);
+    await screen.findByText("Python");
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    // Updated in place from the mutation response — still one list GET.
+    expect(listCandidateSkillsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies onChanged after rejecting", async () => {
+    const onChanged = vi.fn();
+    listCandidateSkillsMock.mockResolvedValue([candidateSkill()]);
+    updateCandidateSkillStatusMock.mockResolvedValue(
+      candidateSkill({ status: "rejected" as const }),
+    );
+    render(<SkillsSection accessToken={ACCESS_TOKEN} onChanged={onChanged} />);
+    await screen.findByText("Python");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it("notifies onChanged after adding a skill", async () => {
+    const onChanged = vi.fn();
+    listCandidateSkillsMock.mockResolvedValue([]);
+    addCandidateSkillMock.mockResolvedValue(candidateSkill());
+    render(<SkillsSection accessToken={ACCESS_TOKEN} onChanged={onChanged} />);
+    await screen.findByText(/No skills yet/i);
+
+    fireEvent.change(screen.getByLabelText("Add a skill"), {
+      target: { value: "Python" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not notify onChanged when a mutation fails", async () => {
+    const onChanged = vi.fn();
+    listCandidateSkillsMock.mockResolvedValue([candidateSkill()]);
+    updateCandidateSkillStatusMock.mockRejectedValue(new Error("nope"));
+    render(<SkillsSection accessToken={ACCESS_TOKEN} onChanged={onChanged} />);
+    await screen.findByText("Python");
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+});

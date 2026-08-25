@@ -13,6 +13,11 @@ import {
 
 interface ResumeSectionProps {
   accessToken: string;
+  /** Fired ONCE when a resume leaves queued/processing for a terminal
+   * state, so the skill sections can pick up what extraction produced.
+   * Called for "failed" too: a failed run may still have changed
+   * something, and the consumer refetch is cheap and idempotent. */
+  onWorkComplete?: () => void;
 }
 
 // How often to re-fetch the list while any resume is still
@@ -23,6 +28,10 @@ interface ResumeSectionProps {
 const POLL_INTERVAL_MS = 2000;
 
 const PENDING_STATUSES: ResumeStatus[] = ["queued", "processing"];
+
+function isPending(resume: ResumeResponse): boolean {
+  return PENDING_STATUSES.includes(resume.status);
+}
 
 const STATUS_LABELS: Record<ResumeStatus, string> = {
   queued: "Queued",
@@ -53,13 +62,20 @@ function formatDate(iso: string): string {
   });
 }
 
-export default function ResumeSection({ accessToken }: ResumeSectionProps) {
+export default function ResumeSection({
+  accessToken,
+  onWorkComplete,
+}: ResumeSectionProps) {
   const [resumes, setResumes] = useState<ResumeResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
+  // Per-resume status as of the previous render, so the effect below can
+  // fire on the queued -> terminal EDGE rather than on every poll tick
+  // that keeps reporting the same terminal status.
+  const previousStatusesRef = useRef<Map<string, ResumeStatus>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -84,14 +100,20 @@ export default function ResumeSection({ accessToken }: ResumeSectionProps) {
 
   // Polls the list while any resume is still queued/processing, and
   // stops as soon as none are (including immediately, if nothing ever
-  // was) — re-evaluated whenever `resumes` changes, so a newly
-  // uploaded resume (or a delete) correctly starts/stops this again.
-  // Silently retries on a transient poll failure rather than
-  // surfacing a page-level error for it — the next tick tries again.
+  // was) — so a newly uploaded resume, or a delete, correctly starts and
+  // stops this again. Silently retries on a transient poll failure
+  // rather than surfacing a page-level error for it: the next tick
+  // tries again, and a background refresh must never replace content
+  // the user is reading with an error.
+  //
+  // Keyed on the derived BOOLEAN, not on `resumes`. Every poll calls
+  // setResumes with a freshly built array, so depending on the array
+  // itself re-ran this effect on every tick — tearing the interval down
+  // and rebuilding it each cycle. Harmless in practice (it degraded to
+  // setTimeout semantics) but needlessly fragile; a primitive dependency
+  // means the interval is created once and cleared once.
+  const hasPending = resumes.some(isPending);
   useEffect(() => {
-    const hasPending = resumes.some((resume) =>
-      PENDING_STATUSES.includes(resume.status),
-    );
     if (!hasPending) return;
 
     let cancelled = false;
@@ -107,7 +129,28 @@ export default function ResumeSection({ accessToken }: ResumeSectionProps) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [accessToken, resumes]);
+  }, [accessToken, hasPending]);
+
+  // Notifies the parent when a resume crosses from queued/processing to
+  // a terminal state, so the skill sections refetch what extraction just
+  // produced. Fires on the EDGE only: the poll keeps returning
+  // "succeeded" every 2s until something else changes, and re-notifying
+  // each time would refetch the skill endpoints forever.
+  useEffect(() => {
+    const previous = previousStatusesRef.current;
+    const settled = resumes.some((resume) => {
+      const before = previous.get(resume.id);
+      return (
+        before !== undefined &&
+        PENDING_STATUSES.includes(before) &&
+        !isPending(resume)
+      );
+    });
+    previousStatusesRef.current = new Map(
+      resumes.map((resume) => [resume.id, resume.status]),
+    );
+    if (settled) onWorkComplete?.();
+  }, [resumes, onWorkComplete]);
 
   // Uploads as soon as a file is picked — no separate "confirm" step —
   // simplest flow the native file input supports on its own.

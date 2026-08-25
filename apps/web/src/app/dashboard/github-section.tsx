@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 
 import {
   ApiError,
@@ -18,6 +24,11 @@ import {
 
 interface GitHubSectionProps {
   accessToken: string;
+  /** Fired ONCE when an ingestion run leaves queued/processing for a
+   * terminal state, so the skill sections pick up what Prompt 3.3
+   * derived from the newly imported repositories. Called for "failed"
+   * too — a partial import may still have written repositories. */
+  onWorkComplete?: () => void;
 }
 
 // Rendered in BOTH the connected and not-connected states, always
@@ -116,7 +127,10 @@ function PublicDataNotice() {
   );
 }
 
-export default function GitHubSection({ accessToken }: GitHubSectionProps) {
+export default function GitHubSection({
+  accessToken,
+  onWorkComplete,
+}: GitHubSectionProps) {
   const [connection, setConnection] = useState<GitHubConnectionResponse | null>(
     null,
   );
@@ -129,6 +143,9 @@ export default function GitHubSection({ accessToken }: GitHubSectionProps) {
     [],
   );
   const [importing, setImporting] = useState(false);
+  // The run's status as of the previous render, so the effect below
+  // fires on the active -> terminal EDGE rather than on every poll tick.
+  const previousRunStatusRef = useRef<IngestionStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -213,6 +230,31 @@ export default function GitHubSection({ accessToken }: GitHubSectionProps) {
       clearInterval(timer);
     };
   }, [run, fetchIngestion]);
+
+  // Notifies the parent when an import finishes, so the skill sections
+  // refetch what Prompt 3.3 derived from the imported repositories.
+  //
+  // EDGE-triggered, and that matters more here than for resumes: a run
+  // paused by GitHub rate limiting stays "processing" and is polled for
+  // as long as an hour, while a finished run keeps reporting
+  // "succeeded" indefinitely. Firing on the transition means exactly one
+  // notification per import, and none at all while throttled — a paused
+  // run has not produced anything new to fetch.
+  //
+  // This never starts another import; it only reports that one ended.
+  useEffect(() => {
+    const previous = previousRunStatusRef.current;
+    const current = run?.status ?? null;
+    previousRunStatusRef.current = current;
+    if (
+      previous !== null &&
+      ACTIVE_STATUSES.includes(previous) &&
+      current !== null &&
+      !ACTIVE_STATUSES.includes(current)
+    ) {
+      onWorkComplete?.();
+    }
+  }, [run, onWorkComplete]);
 
   async function handleImport() {
     setImporting(true);

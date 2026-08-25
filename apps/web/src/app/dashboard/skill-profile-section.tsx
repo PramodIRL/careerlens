@@ -11,7 +11,27 @@ import {
 
 interface SkillProfileSectionProps {
   accessToken: string;
+  /** Bumped by the dashboard on ANY change to the underlying evidence:
+   * resume extraction or a GitHub import finishing, and the user adding,
+   * confirming or rejecting a skill. Every one of those moves the counts
+   * this section displays. */
+  refreshKey?: number;
 }
+
+// The workers commit a job's terminal status BEFORE the skills derived
+// from it (app/worker.py: _mark_succeeded commits, then
+// extract_skills_for_resume runs and commits separately; GitHub does the
+// same with _derive_github_skills). So a refetch triggered the instant
+// we observe "succeeded" can legitimately arrive before the evidence
+// lands.
+//
+// The window is tiny — measured at ~9ms in this database — so one
+// delayed follow-up covers it with enormous margin. Deliberately a
+// single extra fetch rather than a retry loop: "poll until the payload
+// stops changing" cannot tell "still writing" from "genuinely matched
+// nothing", and would spin for every resume that produces no skills.
+// If both attempts still lose the race, Refresh remains the fallback.
+const SETTLE_REFETCH_MS = 2000;
 
 // This section renders the SUMMARY ONLY. It deliberately does not list
 // every skill: SkillsSection already does that, and it owns the
@@ -29,6 +49,7 @@ const SOURCE_ORDER: EvidenceSourceType[] = ["resume", "github", "manual"];
 
 export default function SkillProfileSection({
   accessToken,
+  refreshKey = 0,
 }: SkillProfileSectionProps) {
   const [profile, setProfile] = useState<SkillProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,26 +64,49 @@ export default function SkillProfileSection({
     }
   }, [accessToken]);
 
+  // ONE effect for the initial load and every refresh, keyed on
+  // refreshKey. `loading` is only ever cleared, never re-set, so a
+  // background refresh never replaces a rendered summary with the
+  // skeleton; a failed one keeps the last good numbers rather than
+  // blanking the section.
+  //
+  // On a refreshKey bump this fetches immediately AND once more after
+  // SETTLE_REFETCH_MS, to cover the worker's status-before-data commit
+  // ordering described above. Both are cancelled on unmount, and the
+  // timer is cleared if another bump arrives first.
   useEffect(() => {
     let cancelled = false;
-    getSkillProfile(accessToken)
-      .then((next) => {
-        if (!cancelled) setProfile(next);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(
-            err instanceof ApiError ? err.message : "something went wrong",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+
+    const fetchProfile = () =>
+      getSkillProfile(accessToken)
+        .then((next) => {
+          if (!cancelled) setProfile(next);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(
+              err instanceof ApiError ? err.message : "something went wrong",
+            );
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+
+    void fetchProfile();
+
+    // Only after an external change — the very first mount has no
+    // in-flight worker to wait for, so a second fetch there is waste.
+    const timer =
+      refreshKey > 0
+        ? setTimeout(() => void fetchProfile(), SETTLE_REFETCH_MS)
+        : undefined;
+
     return () => {
       cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
     };
-  }, [accessToken]);
+  }, [accessToken, refreshKey]);
 
   if (loading) {
     return (
@@ -72,7 +116,12 @@ export default function SkillProfileSection({
     );
   }
 
-  if (error) {
+  // Only REPLACE the section with an error when there is nothing good to
+  // show. Once a summary has rendered, a failed background refetch keeps
+  // it and surfaces the error alongside — the same shape SkillsSection
+  // uses. Blanking a populated summary because one poll failed would be
+  // a worse regression than the stale data auto-refresh set out to fix.
+  if (error && !profile) {
     return (
       <p
         role="alert"
@@ -98,6 +147,15 @@ export default function SkillProfileSection({
 
   return (
     <div className="flex w-full flex-col gap-4 text-left">
+      {error && (
+        <p
+          role="alert"
+          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+        >
+          {error}
+        </p>
+      )}
+
       <div className="flex flex-wrap gap-4">
         <Stat label="Skills" value={summary.total} />
         <Stat label="Confirmed" value={summary.confirmed} />

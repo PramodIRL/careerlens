@@ -14,6 +14,15 @@ import {
 
 interface SkillsSectionProps {
   accessToken: string;
+  /** Bumped by the dashboard when resume extraction or a GitHub import
+   * finishes. Any change refetches — this is how newly extracted skills
+   * appear without the user clicking Refresh. */
+  refreshKey?: number;
+  /** Called after this section changes something (add, confirm,
+   * reject), so the unified profile's counts catch up. Deliberately not
+   * used to refetch THIS list: the mutation responses already updated it
+   * in place, and refetching here would be a redundant request. */
+  onChanged?: () => void;
 }
 
 // Skills appear once the extraction worker has processed an uploaded
@@ -51,7 +60,11 @@ function confidenceLabel(confidence: number): string {
   return `${Math.round(confidence * 100)}% confidence`;
 }
 
-export default function SkillsSection({ accessToken }: SkillsSectionProps) {
+export default function SkillsSection({
+  accessToken,
+  refreshKey = 0,
+  onChanged,
+}: SkillsSectionProps) {
   const [skills, setSkills] = useState<CandidateSkillResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -59,6 +72,9 @@ export default function SkillsSection({ accessToken }: SkillsSectionProps) {
   const [newSkill, setNewSkill] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // Manual fallback, kept deliberately: it is no longer REQUIRED for any
+  // normal flow, but it is the recovery path when a background refetch
+  // loses a race or fails silently.
   const load = useCallback(async () => {
     try {
       setSkills(await listCandidateSkills(accessToken));
@@ -68,6 +84,15 @@ export default function SkillsSection({ accessToken }: SkillsSectionProps) {
     }
   }, [accessToken]);
 
+  // ONE effect for both the initial load and every subsequent refresh —
+  // previously a mount effect and `load` held near-identical bodies that
+  // could drift apart. Keyed on refreshKey, so a bump from the dashboard
+  // refetches exactly once.
+  //
+  // `loading` is only ever cleared, never re-set: a background refresh
+  // must not replace a populated list with the "Loading skills…"
+  // skeleton, which would flicker the page every time a resume finished.
+  // A failed background refresh likewise keeps the last good data.
   useEffect(() => {
     let cancelled = false;
     listCandidateSkills(accessToken)
@@ -87,16 +112,20 @@ export default function SkillsSection({ accessToken }: SkillsSectionProps) {
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, refreshKey]);
 
   async function decide(id: string, status: CandidateSkillDecision) {
     setBusyId(id);
     setError(null);
     try {
       const updated = await updateCandidateSkillStatus(accessToken, id, status);
+      // Updated in place from the mutation's own response — no refetch
+      // needed here, which is why this list ignores its own onChanged.
       setSkills((prev) =>
         prev.map((skill) => (skill.id === id ? updated : skill)),
       );
+      // The profile's confirmed/suggested counts just changed.
+      onChanged?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "something went wrong");
     } finally {
@@ -115,6 +144,8 @@ export default function SkillsSection({ accessToken }: SkillsSectionProps) {
       await addCandidateSkill(accessToken, name);
       setNewSkill("");
       await load();
+      // A new skill plus its manual evidence — the profile must catch up.
+      onChanged?.();
     } catch (err) {
       // A 422 here is the expected "not in the taxonomy" answer, so the
       // API's own message is the useful thing to show.

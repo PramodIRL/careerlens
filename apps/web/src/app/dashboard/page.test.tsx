@@ -11,6 +11,9 @@ const getCurrentUserMock = vi.fn();
 const logoutMock = vi.fn();
 const getProfileMock = vi.fn();
 const listResumesMock = vi.fn();
+const listCandidateSkillsMock = vi.fn();
+const getSkillProfileMock = vi.fn();
+const getGitHubConnectionMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -29,6 +32,14 @@ vi.mock("@/lib/api-client", async () => {
     // resume-section.test.tsx.
     getProfile: (...args: unknown[]) => getProfileMock(...args),
     listResumes: (...args: unknown[]) => listResumesMock(...args),
+    // Prompt 3.4 + auto-refresh: the dashboard also renders
+    // <SkillsSection>, <SkillProfileSection> and <GitHubSection>, and
+    // now coordinates refreshes between them.
+    listCandidateSkills: (...args: unknown[]) =>
+      listCandidateSkillsMock(...args),
+    getSkillProfile: (...args: unknown[]) => getSkillProfileMock(...args),
+    getGitHubConnection: (...args: unknown[]) =>
+      getGitHubConnectionMock(...args),
   };
 });
 
@@ -39,6 +50,19 @@ const MOCK_USER = {
   id: "1",
   email: "alice@example.com",
   created_at: "2026-01-01T00:00:00Z",
+};
+
+const EMPTY_PROFILE = {
+  summary: {
+    total: 0,
+    confirmed: 0,
+    suggested: 0,
+    rejected: 0,
+    by_source: { resume: 0, github: 0, manual: 0 },
+    multi_source: 0,
+    reviewed: true,
+  },
+  skills: [],
 };
 
 function renderDashboard() {
@@ -67,6 +91,11 @@ beforeEach(() => {
     updated_at: "2026-01-01T00:00:00Z",
   });
   listResumesMock.mockReset().mockResolvedValue([]);
+  // Sensible defaults for the other sections the dashboard renders, so
+  // every test starts from a quiet, fully-mocked page.
+  getGitHubConnectionMock.mockReset().mockResolvedValue(null);
+  listCandidateSkillsMock.mockReset().mockResolvedValue([]);
+  getSkillProfileMock.mockReset().mockResolvedValue(EMPTY_PROFILE);
 });
 
 describe("dashboard protected navigation", () => {
@@ -117,4 +146,66 @@ describe("dashboard protected navigation", () => {
     // push, from the effect alone, once everything above has settled.
     expect(pushMock).toHaveBeenCalledTimes(1);
   });
+});
+
+// --- cross-section auto-refresh --------------------------------------
+
+describe("dashboard refresh coordination", () => {
+  // The file-level beforeEach already mocks every section; these tests
+  // only need an authenticated session on top of it.
+  beforeEach(() => {
+    refreshMock.mockResolvedValue({ access_token: "tok" });
+    getCurrentUserMock.mockResolvedValue(MOCK_USER);
+  });
+
+  it("refetches skills and profile when a resume finishes extracting", async () => {
+    // The whole point of the change: the user uploads, waits, and the
+    // skill sections update themselves — no Refresh click anywhere.
+    const queued = {
+      id: "r1",
+      original_filename: "cv.pdf",
+      content_type: "application/pdf",
+      file_size_bytes: 1024,
+      status: "queued" as const,
+      error_message: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    listResumesMock
+      .mockResolvedValueOnce([queued])
+      .mockResolvedValue([{ ...queued, status: "succeeded" as const }]);
+
+    renderDashboard();
+    await screen.findByText("Queued");
+
+    const skillsBefore = listCandidateSkillsMock.mock.calls.length;
+    const profileBefore = getSkillProfileMock.mock.calls.length;
+
+    // Extraction completes on the next poll tick.
+    await screen.findByText("Ready", {}, { timeout: 4000 });
+
+    await waitFor(
+      () => {
+        expect(listCandidateSkillsMock.mock.calls.length).toBeGreaterThan(
+          skillsBefore,
+        );
+        expect(getSkillProfileMock.mock.calls.length).toBeGreaterThan(
+          profileBefore,
+        );
+      },
+      { timeout: 4000 },
+    );
+  }, 15000);
+
+  it("does not refetch skills while nothing has completed", async () => {
+    listResumesMock.mockResolvedValue([]);
+
+    renderDashboard();
+    await waitFor(() => expect(listCandidateSkillsMock).toHaveBeenCalled());
+    const skillsCalls = listCandidateSkillsMock.mock.calls.length;
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    expect(listCandidateSkillsMock.mock.calls.length).toBe(skillsCalls);
+  }, 10000);
 });

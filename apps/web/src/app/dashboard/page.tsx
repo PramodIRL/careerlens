@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 
@@ -15,6 +15,41 @@ export default function DashboardPage() {
   const { status, user, accessToken, logout } = useAuth();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+
+  // --- Cross-section refresh coordination -----------------------------
+  //
+  // The five sections below are siblings with no shared state, so the
+  // two that know when async work finished (resume extraction, GitHub
+  // ingestion) had no way to tell the two that display its results.
+  // That, not missing polling, is why a manual Refresh was needed: both
+  // producers already poll correctly and stop on a terminal state.
+  //
+  // TWO counters rather than one, deliberately. A single counter would
+  // make SkillsSection refetch after its OWN confirm/reject — data it
+  // just updated in place from the mutation's response — costing a
+  // redundant request per click. Splitting the signals means each
+  // section refetches only for changes it could not already know about:
+  //
+  //   externalVersion  resume/GitHub work reached a terminal state.
+  //                    Both skill sections must refetch.
+  //   profileVersion   SkillsSection mutated something locally. Only
+  //                    the profile summary needs to catch up.
+  //
+  // A counter, not a boolean: every bump is a distinct value, so two
+  // completions in quick succession cannot collapse into one refetch.
+  const [externalVersion, setExternalVersion] = useState(0);
+  const [profileVersion, setProfileVersion] = useState(0);
+
+  // Stable identities — these are effect dependencies in the children,
+  // so an inline arrow would re-run those effects on every render.
+  const handleExternalWorkComplete = useCallback(
+    () => setExternalVersion((n) => n + 1),
+    [],
+  );
+  const handleSkillsChanged = useCallback(
+    () => setProfileVersion((n) => n + 1),
+    [],
+  );
 
   // Protected navigation: the single redirect authority for leaving this
   // page whenever there's no valid session — covers both a mount-time
@@ -81,28 +116,43 @@ export default function DashboardPage() {
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your resumes
         </h2>
-        <ResumeSection accessToken={accessToken} />
+        <ResumeSection
+          accessToken={accessToken}
+          onWorkComplete={handleExternalWorkComplete}
+        />
       </div>
 
       <div className="w-full max-w-sm">
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your GitHub
         </h2>
-        <GitHubSection accessToken={accessToken} />
+        <GitHubSection
+          accessToken={accessToken}
+          onWorkComplete={handleExternalWorkComplete}
+        />
       </div>
 
       <div className="w-full max-w-sm">
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your skill profile
         </h2>
-        <SkillProfileSection accessToken={accessToken} />
+        {/* Listens to BOTH signals: its counts change when async work
+            lands new evidence, and when the user confirms or rejects. */}
+        <SkillProfileSection
+          accessToken={accessToken}
+          refreshKey={externalVersion + profileVersion}
+        />
       </div>
 
       <div className="w-full max-w-sm">
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your skills
         </h2>
-        <SkillsSection accessToken={accessToken} />
+        <SkillsSection
+          accessToken={accessToken}
+          refreshKey={externalVersion}
+          onChanged={handleSkillsChanged}
+        />
       </div>
     </main>
   );
