@@ -266,3 +266,68 @@ def find_skill_matches(text: str, terms: Sequence[SkillTerm]) -> list[SkillMatch
             break
 
     return sorted(best.values(), key=lambda match: match.start)
+
+
+def find_all_skill_matches(text: str, terms: Sequence[SkillTerm]) -> list[SkillMatch]:
+    """EVERY occurrence of every skill, in document order (Prompt 4.2).
+
+    The counterpart to `find_skill_matches` above, which deliberately
+    collapses to ONE representative match per skill. That collapsing is
+    right for a resume — Prompt 2.3 stores one excerpt per
+    candidate-skill/source — but it discards exactly what job-requirement
+    classification needs:
+
+        "Docker is a plus. Python is required. Python is nice to have."
+
+    `find_skill_matches` returns Python once, at its first occurrence, so
+    a caller cannot tell that the posting also calls it required. This
+    returns both, and the caller applies its own precedence rule.
+
+    ADDITIVE ONLY. `find_skill_matches` is untouched and remains what
+    resume and GitHub extraction call; nothing about their behaviour
+    changes. This shares that function's primitives exactly — the same
+    `compile_term` patterns, the same boundary lookarounds, the same
+    list-context guard for ambiguous terms, the same MatchKind, and the
+    same CONFIDENCE_BY_KIND — so a term matches here if and only if it
+    would match there.
+
+    THE ONE DELIBERATE DIFFERENCE, beyond returning every hit: a longer
+    term still claims its span first (so "JavaScript" wins over "Java" at
+    the same position), but a shorter term is no longer blocked from
+    matching ELSEWHERE in the text. Under the single-match rule that
+    distinction never surfaced, because only one hit per skill survived
+    anyway.
+
+    Results are sorted by position, so output is stable across runs and a
+    caller's tie-breaking is deterministic.
+    """
+    if not text or not text.strip():
+        return []
+
+    ordered = sorted(terms, key=lambda t: (-len(t.term), t.term.casefold()))
+    claimed: list[tuple[int, int]] = []
+    matches: list[SkillMatch] = []
+
+    for term in ordered:
+        kind = _kind_for(term)
+        needs_list_context = kind is MatchKind.AMBIGUOUS_LIST_CONTEXT
+
+        for found in compile_term(term.term).finditer(text):
+            start, end = found.start(), found.end()
+            if _overlaps(claimed, start, end):
+                continue
+            if needs_list_context and not _in_list_context(text, start, end):
+                continue
+
+            claimed.append((start, end))
+            matches.append(
+                SkillMatch(
+                    skill_id=term.skill_id,
+                    matched_term=term.term,
+                    kind=kind,
+                    excerpt=_excerpt_for(text, start, end),
+                    start=start,
+                )
+            )
+
+    return sorted(matches, key=lambda match: match.start)

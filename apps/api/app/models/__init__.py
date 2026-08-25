@@ -6,6 +6,7 @@ from app.models.github_repository import (
     GitHubRepositoryLanguage,
     GitHubRepositoryTopic,
 )
+from app.models.job_requirement import JobSkillRequirement
 from app.models.profile import Profile, ProfileTargetRole, ProfileTargetSkill
 from app.models.refresh_token import RefreshToken
 from app.models.resume import Resume
@@ -21,6 +22,7 @@ __all__ = [
     "GitHubRepository",
     "GitHubRepositoryLanguage",
     "GitHubRepositoryTopic",
+    "JobSkillRequirement",
     "Profile",
     "ProfileTargetRole",
     "ProfileTargetSkill",
