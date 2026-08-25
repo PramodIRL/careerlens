@@ -39,6 +39,11 @@ from enum import StrEnum
 # capture the second skill.
 _CLAUSE_BOUNDARY = re.compile(r"[.;:!?\n\r]|(?:,)")
 
+# Sentence boundaries: the same terminators MINUS the comma. Used only
+# to soften a capability construction (see classify_at), never to widen
+# an explicit requirement.
+_SENTENCE_BOUNDARY = re.compile(r"[.;:!?\n\r]")
+
 # Excerpt ceiling, matching skill_evidence's column width so a stored
 # window is always representable.
 _MAX_EXCERPT_CHARS = 500
@@ -80,6 +85,13 @@ _NEGATION_PHRASES: tuple[str, ...] = (
     "does not require",
     "do not require",
     "don't require",
+    # "You do not need to be able to write SQL." The list already had
+    # "not needed"; the bare verb form was missing, so a capability
+    # phrase could slip past negation.
+    "do not need",
+    "does not need",
+    "don't need",
+    "doesn't need",
     "isn't required",
     "is not needed",
     "not needed",
@@ -109,6 +121,40 @@ _REQUIRED_CUES: tuple[str, ...] = (
     "needed",
     "proficiency in",
     "strong command of",
+)
+
+# Capability phrasing: a posting stating what the candidate must be able
+# to DO, rather than naming a skill and calling it "required".
+#
+#     "Should be able to write SQL."
+#     "Applicants should have the ability to use Docker."
+#
+# Both express an expected job capability as plainly as the word
+# "required" does, and treating them as a bare mention understates the
+# requirement — which then distorts the match score downstream.
+#
+# DELIBERATELY MODAL-GATED, NOT A BARE "able to" CUE. A plain substring
+# rule was measured against real phrasings and produced false positives
+# on BENEFIT copy:
+#
+#     "You will be able to use Docker every day."      <- a perk
+#     "You'll be able to work with Kubernetes here."   <- a perk
+#
+# Those describe what the job offers, not what it demands. Excluding
+# "will" (and "you'll") is exactly what separates an obligation from a
+# perk, so only the obligation modals below open the capability branch.
+#
+# Note this is NOT "should -> required": "should" only counts when it is
+# followed by "be able to". That is why "Candidates should ideally know
+# Docker" still resolves to preferred — no capability construction, so
+# this never fires and the existing preferred cue decides.
+#
+# `ability to` stands alone because the modal is routinely separated
+# from it ("should HAVE THE ability to use Docker"), which no reasonable
+# adjacency rule would reach.
+_CAPABILITY_PATTERN = re.compile(
+    r"\b(?:should|must|need to|needs to|expected to|has to|have to)\s+be\s+able to\b"
+    r"|\bability to\b"
 )
 
 _PREFERRED_CUES: tuple[str, ...] = (
@@ -141,6 +187,21 @@ def clause_around(text: str, position: int) -> tuple[int, int]:
     for boundary in _CLAUSE_BOUNDARY.finditer(text, 0, position):
         start = boundary.end()
     match = _CLAUSE_BOUNDARY.search(text, position)
+    end = match.start() if match else len(text)
+    return start, end
+
+
+def _sentence_around(text: str, position: int) -> tuple[int, int]:
+    """The span of the SENTENCE containing `position` — clause bounds
+    without the comma.
+
+    Used for exactly one purpose: seeing whether a trailing qualifier
+    softens a capability construction. See classify_at.
+    """
+    start = 0
+    for boundary in _SENTENCE_BOUNDARY.finditer(text, 0, position):
+        start = boundary.end()
+    match = _SENTENCE_BOUNDARY.search(text, position)
     end = match.start() if match else len(text)
     return start, end
 
@@ -194,8 +255,33 @@ def classify_at(text: str, position: int) -> RequirementLevel:
     if _is_negated(window):
         return RequirementLevel.MENTIONED
 
-    has_required = any(cue in window for cue in _REQUIRED_CUES)
+    has_explicit_required = any(cue in window for cue in _REQUIRED_CUES)
+    # Capability phrasing counts as a requirement cue, not as a fourth
+    # precedence step — so negation still wins over it, and the
+    # both-cues ambiguity rule below still applies.
+    has_capability = _CAPABILITY_PATTERN.search(window) is not None
+    has_required = has_explicit_required or has_capability
+
     has_preferred = any(cue in window for cue in _PREFERRED_CUES)
+    if has_capability and not has_explicit_required and not has_preferred:
+        # A trailing qualifier can soften a capability construction:
+        #
+        #     "Should be able to use Docker, ideally."
+        #
+        # The comma is a clause boundary, so "ideally" lands outside the
+        # clause and the ambiguity rule would never see it. Widening to
+        # the sentence recovers it.
+        #
+        # NARROW ON PURPOSE — only when the requirement signal came
+        # SOLELY from a capability phrase. An explicit "required" is a
+        # strong, local claim and is never widened, which is what keeps
+        # "Python is required, Docker is a plus." reading as required
+        # for Python. A capability construction is the weaker, more
+        # diffuse assertion, and is the only one a trailing preference
+        # qualifier may legitimately soften.
+        sentence_start, sentence_end = _sentence_around(text, position)
+        sentence = text[sentence_start:sentence_end].casefold()
+        has_preferred = any(cue in sentence for cue in _PREFERRED_CUES)
 
     if has_required and has_preferred:
         return RequirementLevel.PREFERRED

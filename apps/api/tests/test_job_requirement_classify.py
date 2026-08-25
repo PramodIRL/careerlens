@@ -264,3 +264,84 @@ def test_text_with_no_clause_terminator_is_one_clause() -> None:
 )
 def test_classification_is_case_insensitive(text: str) -> None:
     assert classify_at(text, 0) is RequirementLevel.REQUIRED
+
+
+# --- capability phrasing (4.2 follow-up) ------------------------------
+#
+# Found in real browser use: "Databases (SQL) Should be able to write
+# queries" classified SQL as merely MENTIONED. "Should be able to write
+# queries" states an expected job capability as plainly as the word
+# "required" does, and under-classifying it distorts the match score
+# downstream.
+
+
+@pytest.mark.parametrize(
+    ("text", "skill"),
+    [
+        ("Should be able to write SQL.", "SQL"),
+        ("Must be able to write SQL.", "SQL"),
+        ("Candidates should be able to write Python.", "Python"),
+        ("Candidate must be able to work with PostgreSQL.", "PostgreSQL"),
+        ("Ability to write SQL.", "SQL"),
+        ("Applicants should have the ability to use Docker.", "Docker"),
+        ("You need to be able to write SQL.", "SQL"),
+        ("Everyone needs to be able to use Docker.", "Docker"),
+        ("You are expected to be able to write SQL.", "SQL"),
+        ("You have to be able to use Docker.", "Docker"),
+        ("Everyone has to be able to write SQL.", "SQL"),
+    ],
+)
+def test_capability_phrasing_is_required(text: str, skill: str) -> None:
+    assert _level(text, skill) == "required"
+
+
+def test_the_real_world_browser_case() -> None:
+    """The exact string that exposed the gap."""
+    text = "Databases (SQL) Should be able to write queries"
+    assert _level(text, "SQL") == "required"
+
+
+@pytest.mark.parametrize(
+    ("text", "skill"),
+    [
+        # BENEFIT copy, not an obligation — "will be able to" describes
+        # what the job OFFERS. This is why the rule is modal-gated
+        # rather than a bare "able to" cue.
+        ("You will be able to use Docker every day.", "Docker"),
+        ("You'll be able to work with Docker here.", "Docker"),
+    ],
+)
+def test_benefit_phrasing_is_not_a_requirement(text: str, skill: str) -> None:
+    assert _level(text, skill) != "required"
+
+
+def test_a_trailing_qualifier_softens_a_capability_phrase() -> None:
+    """The comma is a clause boundary, so "ideally" lands outside the
+    clause. A capability construction is the weaker, more diffuse
+    assertion, so the sentence is consulted to recover the qualifier."""
+    assert _level("Should be able to use Docker, ideally.", "Docker") == "preferred"
+
+
+def test_an_explicit_requirement_is_never_softened_by_a_later_clause() -> None:
+    """THE NON-REGRESSION THAT MATTERS. Widening applies ONLY to
+    capability-only signals. An explicit "required" is a strong local
+    claim, so "Python is required, Docker is a plus." must still read
+    required for Python — the case the clause design exists to protect."""
+    text = "Python is required, Docker is a plus."
+    assert _level(text, "Python") == "required"
+    assert _level(text, "Docker") == "preferred"
+
+
+def test_negation_still_wins_over_a_capability_phrase() -> None:
+    """Negation-first precedence is unchanged: a capability
+    construction cannot outrank an explicit denial."""
+    assert _level("You do not need to be able to write SQL.", "SQL") == "mentioned"
+    assert _level("You don't need to be able to use Docker.", "Docker") == "mentioned"
+
+
+def test_should_alone_is_still_not_a_requirement_cue() -> None:
+    """The rule is NOT "should -> required". "should" only counts when
+    followed by "be able to", which is why an existing preferred cue
+    still decides here."""
+    assert _level("Candidates should ideally know Docker.", "Docker") == "preferred"
+    assert _level("You should enjoy working with Docker.", "Docker") == "mentioned"
