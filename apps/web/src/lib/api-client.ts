@@ -5,6 +5,7 @@ const RESUME_BASE = `${API_BASE}/api/v1/resumes`;
 const CANDIDATE_SKILL_BASE = `${API_BASE}/api/v1/candidate-skills`;
 const SKILL_PROFILE_BASE = `${API_BASE}/api/v1/skill-profile`;
 const SAVED_JOB_BASE = `${API_BASE}/api/v1/saved-jobs`;
+const JOB_IMPORT_BASE = `${API_BASE}/api/v1/job-imports`;
 const GITHUB_CONNECTION_BASE = `${API_BASE}/api/v1/github-connection`;
 
 export interface AccessTokenResponse {
@@ -743,4 +744,46 @@ export async function deleteSavedJob(
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
+}
+
+// --- Job import: PDF (Prompt 4.1b) -----------------------------------
+
+/** An UNSAVED draft produced by a PDF import.
+ *
+ * Nothing here is persisted. The user reviews and corrects it, then
+ * `createSavedJob` stores it through the same endpoint manual entry
+ * uses — so an import can never silently save unreviewed data.
+ *
+ * Every field except `description` may be null, meaning "we could not
+ * determine this". It never means a guess: the extractor reads only
+ * fields the document explicitly labels. */
+export interface JobDraftResponse {
+  company: string | null;
+  title: string | null;
+  location: string | null;
+  employment_type: EmploymentType | null;
+  source_url: string | null;
+  description: string;
+  /** Plain-language prompts for the review step. */
+  notes: string[];
+}
+
+/** Read a job-description PDF and return a draft. The file is parsed
+ * server-side and discarded — it is never stored. */
+export async function importJobFromPdf(
+  accessToken: string,
+  file: File,
+): Promise<JobDraftResponse> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch(`${JOB_IMPORT_BASE}/from-pdf`, {
+    method: "POST",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body,
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as JobDraftResponse;
 }

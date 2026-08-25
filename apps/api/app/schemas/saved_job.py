@@ -242,3 +242,39 @@ class SavedJobResponse(BaseModel):
     description: str
     created_at: datetime
     updated_at: datetime
+
+
+class JobDraftResponse(BaseModel):
+    """An UNSAVED, unverified job draft produced by a PDF import
+    (Prompt 4.1b).
+
+    NOTHING HERE IS PERSISTED. The import endpoint returns this and
+    writes no rows at all; the user reviews and corrects it, and only the
+    existing `POST /api/v1/saved-jobs` creates a SavedJob. That is what
+    makes "never silently save incorrect extracted data" structural
+    rather than a promise — there is no code path from an import to a
+    stored row that does not pass through the user.
+
+    Every field except `description` is nullable, and a null means "we
+    could not determine this", which the UI renders as an empty box. It
+    never means "we guessed something" — the PDF extractor reads only
+    fields the document explicitly labels. `description` is always
+    present: an extraction that cannot find one fails outright instead
+    of returning an empty draft.
+
+    `source_url` is always None for a PDF import and exists here so the
+    draft matches the saved-job shape the form submits; the user may
+    still type a link in before saving.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    company: str | None
+    title: str | None
+    location: str | None
+    employment_type: EmploymentType | None
+    source_url: str | None
+    description: str
+    # Plain-language prompts for the review step, e.g. "Company could not
+    # be read from the page — please add it."
+    notes: list[str] = []
