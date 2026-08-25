@@ -4,6 +4,11 @@ How to show the Prompt 2.1–2.4 flow — upload a resume, watch it get
 extracted, inspect the evidence behind each skill, correct what's wrong —
 using fictional documents only.
 
+This walkthrough covers the resume half only. For the whole Phase 4 MVP —
+GitHub evidence, saved jobs, match scores and skill gaps — see
+[phase-4-acceptance.md](phase-4-acceptance.md), which continues from
+where this one stops.
+
 **Never demo with a real resume.** Not your own, not a friend's, not one
 from a job board. An uploaded document is stored on disk and its full
 extracted text is written to the `resumes` table, where it stays until

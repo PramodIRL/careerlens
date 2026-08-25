@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills sample-resumes smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills sample-resumes demo-github smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -19,6 +19,7 @@ help:
 	@echo "  make seed-skills    Seed/update the canonical skill taxonomy (safe to re-run)"
 	@echo "  make github-skills  Re-derive GitHub skill evidence from stored data (no GitHub calls)"
 	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
+	@echo "  make demo-github EMAIL=...  Import the fictional GitHub account for one user"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
 
 format:
@@ -114,6 +115,23 @@ github-skills:
 # generated document cannot be committed. Safe to re-run; overwrites.
 sample-resumes:
 	cd apps/api && uv run python -m scripts.sample_resumes
+
+# Imports the fictional GitHub account (apps/api/scripts/sample_github.py)
+# for ONE already-registered user, running the real ingestion and evidence
+# derivation with NO network request. This is what makes the GitHub half of
+# the product demoable without pointing it at a real person's repositories
+# or spending GitHub's 60-requests-per-hour budget. The user must already
+# exist — this will not create one — and nothing outside that user's rows is
+# touched. There is deliberately no fake-client mode inside the API server
+# itself. Safe to re-run: a second run adds no duplicate repository, evidence
+# or candidate skill and never changes a confirmed/rejected decision, though
+# it does refresh each repository's last_seen_at. See
+# docs/phase-4-acceptance.md.
+demo-github:
+ifndef EMAIL
+	$(error EMAIL is required, e.g. make demo-github EMAIL=ada.sample@example.com)
+endif
+	cd apps/api && uv run python -m scripts.demo_github_import --email "$(EMAIL)"
 
 smoke:
 	./scripts/smoke.sh
