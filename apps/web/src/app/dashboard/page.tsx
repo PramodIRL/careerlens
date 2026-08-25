@@ -137,7 +137,13 @@ export default function DashboardPage() {
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your saved jobs
         </h2>
-        <JobsSection accessToken={accessToken} />
+        {/* Job match scores depend on candidate skills, so they must
+            refetch when a skill is confirmed, rejected or added — the
+            same signals the skill sections already listen to. */}
+        <JobsSection
+          accessToken={accessToken}
+          refreshKey={externalVersion + profileVersion}
+        />
       </div>
 
       <div className="w-full max-w-sm">
