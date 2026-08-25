@@ -37,9 +37,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.auth import get_current_user
 from app.db import get_db
+from app.job_requirements.extract import extract_job_requirements, list_job_requirements
 from app.models.saved_job import SavedJob
+from app.models.skill import Skill
 from app.models.user import User
 from app.schemas.saved_job import (
+    JobSkillRequirementResponse,
+    RequirementExtractionMethod,
+    RequirementLevelSchema,
     SavedJobCreateRequest,
     SavedJobResponse,
     SavedJobUpdateRequest,
@@ -85,6 +90,18 @@ async def create_saved_job(
         source_url=body.source_url,
     )
     db.add(saved_job)
+    # flush, not commit: the row needs an id for the requirements to
+    # reference, but both must land in ONE transaction so a job can
+    # never be stored with missing requirements.
+    await db.flush()
+
+    # Prompt 4.2: derive job-side requirements from the description.
+    # Synchronous and NOT best-effort — unlike resume/GitHub extraction,
+    # where the import genuinely succeeded on its own, here the
+    # extraction is part of saving the job. A failure rolls the whole
+    # request back rather than storing a job with no requirements.
+    await extract_job_requirements(db, saved_job)
+
     await db.commit()
     await db.refresh(saved_job)
     return saved_job
@@ -141,10 +158,23 @@ async def update_saved_job(
     saved_job = await _get_owned_job(db, saved_job_id, current_user)
 
     updates = body.model_dump(exclude_unset=True)
+    # Captured BEFORE the assignment loop so the comparison below sees
+    # the old value.
+    description_changed = (
+        "description" in updates and updates["description"] != saved_job.description
+    )
     for field, value in updates.items():
         if field == "employment_type" and value is not None:
             value = value.value if hasattr(value, "value") else value
         setattr(saved_job, field, value)
+
+    # Re-derive ONLY when the text actually changed. Editing the company
+    # or the location leaves every requirement untouched — including its
+    # id and timestamps — because nothing about the description moved.
+    # Re-sending an identical description is also a no-op, so a client
+    # that PATCHes the whole object does not churn rows.
+    if description_changed:
+        await extract_job_requirements(db, saved_job)
 
     await db.commit()
     await db.refresh(saved_job)
@@ -167,3 +197,54 @@ async def delete_saved_job(
     saved_job = await _get_owned_job(db, saved_job_id, current_user)
     await db.delete(saved_job)
     await db.commit()
+
+
+@router.get("/{saved_job_id}/requirements", response_model=list[JobSkillRequirementResponse])
+async def read_saved_job_requirements(
+    saved_job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[JobSkillRequirementResponse]:
+    """The skills this saved job asks for, strongest first.
+
+    NESTED UNDER THE JOB, AND READ-ONLY, both deliberately.
+
+    Nested, because ownership then costs nothing extra: `_get_owned_job`
+    already proves the caller owns the parent, and a requirement has no
+    other route to it. There is no `/requirements/{id}` endpoint, so a
+    requirement id is never something a client can address — which
+    removes an entire class of ownership mistake rather than guarding
+    against it.
+
+    Read-only, because requirements are DERIVED. The way to change them
+    is to edit the job description; a mutation endpoint would let stored
+    requirements drift away from the text that justifies them, which is
+    exactly what the Evidence-First rule forbids.
+    """
+    saved_job = await _get_owned_job(db, saved_job_id, current_user)
+    rows = await list_job_requirements(db, saved_job.id)
+    if not rows:
+        return []
+
+    skills = {
+        skill.id: skill
+        for skill in (
+            await db.scalars(select(Skill).where(Skill.id.in_([row.skill_id for row in rows])))
+        ).all()
+    }
+    return [
+        JobSkillRequirementResponse(
+            id=row.id,
+            skill_id=row.skill_id,
+            skill_name=skills[row.skill_id].name,
+            skill_category=skills[row.skill_id].category,
+            requirement_level=RequirementLevelSchema(row.requirement_level),
+            matched_term=row.matched_term,
+            excerpt=row.excerpt,
+            confidence=float(row.confidence),
+            extraction_method=RequirementExtractionMethod(row.extraction_method),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]

@@ -278,3 +278,70 @@ class JobDraftResponse(BaseModel):
     # Plain-language prompts for the review step, e.g. "Company could not
     # be read from the page — please add it."
     notes: list[str] = []
+
+
+class RequirementLevelSchema(StrEnum):
+    """How strongly a posting asks for a skill (Prompt 4.2).
+
+    Mirrors app.job_requirements.classify.RequirementLevel at the API
+    boundary. MENTIONED is the default and does NOT mean "weakly
+    required" — it means the posting named a curated skill and said
+    nothing about necessity.
+    """
+
+    REQUIRED = "required"
+    PREFERRED = "preferred"
+    MENTIONED = "mentioned"
+
+
+class RequirementExtractionMethod(StrEnum):
+    """How a job requirement was derived.
+
+    One value today, and it must stay a DETERMINISTIC, inspectable
+    method per docs/project-brief.md's Evidence-First rule: clause-local
+    classification over the existing curated taxonomy and the existing
+    matcher. No model inference anywhere in it.
+    """
+
+    JOB_DESCRIPTION_MATCH = "job_description_match"
+
+
+class JobSkillRequirementResponse(BaseModel):
+    """One skill a saved job asks for.
+
+    Every field exists to answer a question the Evidence-First rule
+    requires this product to be able to answer:
+
+        which skill matched?     -> skill_id / skill_name
+        what text supports it?   -> excerpt (verbatim from the posting)
+        which spelling matched?  -> matched_term ("py" vs "Python")
+        how strongly asked for?  -> requirement_level
+        how sure of the match?   -> confidence
+        what derived it?         -> extraction_method
+        when?                    -> created_at / updated_at
+
+    `saved_job_id` is deliberately absent: these are only ever returned
+    nested under the job they belong to, so echoing it back would be
+    redundant. There is no requirement id in any route either — see
+    app/api/v1/saved_job.py on why ownership stays structural.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    skill_id: UUID
+    skill_name: str
+    skill_category: str | None
+    requirement_level: RequirementLevelSchema
+    # WHICH spelling matched — the difference between explaining a match
+    # and merely asserting it.
+    matched_term: str
+    # The verbatim clause that drove the classification. Never generated
+    # prose: a real slice of the saved job's description.
+    excerpt: str
+    # From the existing matcher, unchanged. Answers "does this string
+    # denote this skill", NOT "how strongly is it required".
+    confidence: float
+    extraction_method: RequirementExtractionMethod
+    created_at: datetime
+    updated_at: datetime
