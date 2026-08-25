@@ -34,8 +34,13 @@ const RESUME_A = {
   updated_at: "2026-01-01T00:00:00Z",
 };
 
-function renderSection() {
-  return render(<ResumeSection accessToken={ACCESS_TOKEN} />);
+function renderSection(onWorkComplete?: () => void) {
+  return render(
+    <ResumeSection
+      accessToken={ACCESS_TOKEN}
+      onWorkComplete={onWorkComplete}
+    />,
+  );
 }
 
 function pdfFile(name = "resume.pdf") {
@@ -193,6 +198,97 @@ describe("resume section", () => {
     await screen.findByText("Ready");
 
     // No further polling once nothing is pending.
+    listResumesMock.mockClear();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(listResumesMock).not.toHaveBeenCalled();
+  }, 10000);
+});
+
+// --- completion notification (auto-refresh coordination) -------------
+
+describe("resume completion notification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const queued = {
+    ...RESUME_A,
+    status: "queued" as const,
+    error_message: null,
+  };
+  const succeeded = {
+    ...RESUME_A,
+    status: "succeeded" as const,
+    error_message: null,
+  };
+  const failed = {
+    ...RESUME_A,
+    status: "failed" as const,
+    error_message: "the document could not be read",
+  };
+
+  it("notifies once when a resume reaches a terminal state", async () => {
+    const onWorkComplete = vi.fn();
+    listResumesMock
+      .mockResolvedValueOnce([queued])
+      .mockResolvedValue([succeeded]);
+
+    renderSection(onWorkComplete);
+    await screen.findByText("Queued");
+    // Nothing has settled yet — the resume is still pending.
+    expect(onWorkComplete).not.toHaveBeenCalled();
+
+    await screen.findByText("Ready", {}, { timeout: 4000 });
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1));
+  }, 10000);
+
+  it("does not re-notify while the status stays terminal", async () => {
+    const onWorkComplete = vi.fn();
+    listResumesMock
+      .mockResolvedValueOnce([queued])
+      .mockResolvedValue([succeeded]);
+
+    renderSection(onWorkComplete);
+    await screen.findByText("Ready", {}, { timeout: 4000 });
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1));
+
+    // Polling has stopped, so further ticks cannot re-fire it.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(onWorkComplete).toHaveBeenCalledTimes(1);
+  }, 10000);
+
+  it("notifies on failure too, and keeps the existing error state", async () => {
+    const onWorkComplete = vi.fn();
+    listResumesMock.mockResolvedValueOnce([queued]).mockResolvedValue([failed]);
+
+    renderSection(onWorkComplete);
+    await screen.findByText("Failed", {}, { timeout: 4000 });
+
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1));
+    // The per-resume failure message is still rendered as before.
+    expect(
+      screen.getByText("the document could not be read"),
+    ).toBeInTheDocument();
+  }, 10000);
+
+  it("never notifies when nothing was ever pending", async () => {
+    const onWorkComplete = vi.fn();
+    listResumesMock.mockResolvedValue([succeeded]);
+
+    renderSection(onWorkComplete);
+    await screen.findByText("Ready");
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(onWorkComplete).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("stops polling after unmount", async () => {
+    listResumesMock.mockResolvedValue([queued]);
+
+    const { unmount } = renderSection();
+    await screen.findByText("Queued");
+    unmount();
+
     listResumesMock.mockClear();
     await new Promise((resolve) => setTimeout(resolve, 2500));
     expect(listResumesMock).not.toHaveBeenCalled();

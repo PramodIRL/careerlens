@@ -47,8 +47,13 @@ function connection(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderSection() {
-  return render(<GitHubSection accessToken={ACCESS_TOKEN} />);
+function renderSection(onWorkComplete?: () => void) {
+  return render(
+    <GitHubSection
+      accessToken={ACCESS_TOKEN}
+      onWorkComplete={onWorkComplete}
+    />,
+  );
 }
 
 function run(overrides: Record<string, unknown> = {}) {
@@ -585,4 +590,99 @@ describe("github import", () => {
     ).not.toBeInTheDocument();
     expect(getLatestGitHubIngestionMock).not.toHaveBeenCalled();
   });
+});
+
+// --- import completion notification (auto-refresh coordination) ------
+
+describe("github import completion notification", () => {
+  it("notifies once when an import reaches a terminal state", async () => {
+    const onWorkComplete = vi.fn();
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock
+      .mockResolvedValueOnce(run({ status: "processing" }))
+      .mockResolvedValue(run({ status: "succeeded" }));
+    listGitHubRepositoriesMock.mockResolvedValue([repository()]);
+
+    renderSection(onWorkComplete);
+
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1), {
+      timeout: 4000,
+    });
+  }, 10000);
+
+  it("notifies once on a failed import, without starting another", async () => {
+    const onWorkComplete = vi.fn();
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock
+      .mockResolvedValueOnce(run({ status: "processing" }))
+      .mockResolvedValue(
+        run({ status: "failed", error_message: "GitHub could not be reached" }),
+      );
+    listGitHubRepositoriesMock.mockResolvedValue([]);
+
+    renderSection(onWorkComplete);
+
+    await waitFor(() => expect(onWorkComplete).toHaveBeenCalledTimes(1), {
+      timeout: 4000,
+    });
+    // Reporting that a run ended must never trigger a new one.
+    expect(startGitHubIngestionMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("does not notify while a run is rate-limited and still processing", async () => {
+    // A throttled run stays "processing" for as long as an hour. It has
+    // produced nothing new, so it must not notify — and must not spin.
+    const onWorkComplete = vi.fn();
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock.mockResolvedValue(
+      run({ status: "processing" }),
+    );
+    listGitHubRepositoriesMock.mockResolvedValue([]);
+
+    renderSection(onWorkComplete);
+    await waitFor(() =>
+      expect(getLatestGitHubIngestionMock).toHaveBeenCalled(),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(onWorkComplete).not.toHaveBeenCalled();
+    expect(startGitHubIngestionMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("does not notify for an already-finished run on mount", async () => {
+    // No transition happened while we were watching, so there is nothing
+    // new to refetch.
+    const onWorkComplete = vi.fn();
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock.mockResolvedValue(
+      run({ status: "succeeded" }),
+    );
+    listGitHubRepositoriesMock.mockResolvedValue([repository()]);
+
+    renderSection(onWorkComplete);
+    await waitFor(() =>
+      expect(getLatestGitHubIngestionMock).toHaveBeenCalled(),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(onWorkComplete).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("stops polling after unmount", async () => {
+    getGitHubConnectionMock.mockResolvedValue(connection());
+    getLatestGitHubIngestionMock.mockResolvedValue(
+      run({ status: "processing" }),
+    );
+    listGitHubRepositoriesMock.mockResolvedValue([]);
+
+    const { unmount } = renderSection();
+    await waitFor(() =>
+      expect(getLatestGitHubIngestionMock).toHaveBeenCalled(),
+    );
+    unmount();
+
+    getLatestGitHubIngestionMock.mockClear();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(getLatestGitHubIngestionMock).not.toHaveBeenCalled();
+  }, 10000);
 });

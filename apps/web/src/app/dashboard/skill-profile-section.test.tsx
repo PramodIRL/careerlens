@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSkillProfileMock = vi.fn();
@@ -161,4 +161,101 @@ describe("skill profile section", () => {
     // duplication smell; this section deliberately shows only the rollup.
     expect(screen.queryByText("Python")).not.toBeInTheDocument();
   });
+});
+
+describe("skill profile auto-refresh", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not fire the settle refetch on first mount", async () => {
+    // Nothing is in flight on a cold mount, so a second fetch is waste.
+    getSkillProfileMock.mockResolvedValue(profile());
+    render(<SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={0} />);
+    await waitFor(() => expect(screen.getByText("Skills")).toBeInTheDocument());
+
+    expect(getSkillProfileMock).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(getSkillProfileMock).toHaveBeenCalledTimes(1);
+  }, 10000);
+
+  it("refetches immediately and once more when refreshKey changes", async () => {
+    // The workers commit a job's terminal status BEFORE the evidence
+    // derived from it, so the immediate fetch can lose the race. The
+    // single delayed follow-up covers that window.
+    getSkillProfileMock.mockResolvedValue(profile());
+    const { rerender } = render(
+      <SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await waitFor(() => expect(screen.getByText("Skills")).toBeInTheDocument());
+    getSkillProfileMock.mockClear();
+
+    rerender(<SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+
+    await waitFor(() => expect(getSkillProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getSkillProfileMock).toHaveBeenCalledTimes(2), {
+      timeout: 4000,
+    });
+
+    // Exactly two — the follow-up is a single retry, not a loop.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(getSkillProfileMock).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it("cancels the pending settle refetch on unmount", async () => {
+    getSkillProfileMock.mockResolvedValue(profile());
+    const { rerender, unmount } = render(
+      <SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await waitFor(() => expect(screen.getByText("Skills")).toBeInTheDocument());
+
+    rerender(<SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+    await waitFor(() => expect(getSkillProfileMock).toHaveBeenCalledTimes(2));
+    unmount();
+
+    getSkillProfileMock.mockClear();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(getSkillProfileMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("does not show the loading skeleton during a background refetch", async () => {
+    getSkillProfileMock.mockResolvedValue(profile());
+    const { rerender } = render(
+      <SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await waitFor(() => expect(screen.getByText("Skills")).toBeInTheDocument());
+
+    rerender(<SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+
+    expect(
+      screen.queryByText(/Loading your skill profile/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Skills")).toBeInTheDocument();
+  }, 10000);
+
+  it("keeps the last good summary when a background refetch fails", async () => {
+    getSkillProfileMock
+      .mockResolvedValueOnce(profile())
+      .mockRejectedValue(new Error("network"));
+    const { rerender } = render(
+      <SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={0} />,
+    );
+    await waitFor(() => expect(screen.getByText("Skills")).toBeInTheDocument());
+
+    rerender(<SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={1} />);
+    await waitFor(() => expect(getSkillProfileMock).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText("Skills")).toBeInTheDocument();
+  }, 10000);
+
+  it("keeps the manual Refresh button working", async () => {
+    getSkillProfileMock.mockResolvedValue(profile());
+    render(<SkillProfileSection accessToken={ACCESS_TOKEN} refreshKey={0} />);
+    await waitFor(() => expect(screen.getByText("Skills")).toBeInTheDocument());
+    getSkillProfileMock.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(getSkillProfileMock).toHaveBeenCalledTimes(1));
+  }, 10000);
 });
