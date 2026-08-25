@@ -10,6 +10,7 @@ from app.api.v1.github_ingestion import router as github_ingestion_router
 from app.api.v1.health import router as health_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.resume import router as resume_router
+from app.api.v1.saved_job import router as saved_job_router
 from app.api.v1.skill_profile import router as skill_profile_router
 
 
@@ -51,6 +52,9 @@ app.include_router(health_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1/auth")
 app.include_router(profile_router, prefix="/api/v1/profiles")
 app.include_router(resume_router, prefix="/api/v1/resumes")
+# Prompt 4.1 — user-owned saved job descriptions. Inert storage: no
+# skill extraction (4.2) and no matching (4.3) happen here.
+app.include_router(saved_job_router, prefix="/api/v1/saved-jobs")
 app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
 # Prompt 3.4 — the READ-ONLY presentation view over the same two tables
 # the candidate-skill routes above mutate. A separate prefix, not an

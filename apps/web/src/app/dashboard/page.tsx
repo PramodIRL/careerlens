@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
 import GitHubSection from "./github-section";
+import JobsSection from "./jobs-section";
 import ProfileForm from "./profile-form";
 import ResumeSection from "./resume-section";
 import SkillProfileSection from "./skill-profile-section";
@@ -130,6 +131,13 @@ export default function DashboardPage() {
           accessToken={accessToken}
           onWorkComplete={handleExternalWorkComplete}
         />
+      </div>
+
+      <div className="w-full max-w-sm">
+        <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+          Your saved jobs
+        </h2>
+        <JobsSection accessToken={accessToken} />
       </div>
 
       <div className="w-full max-w-sm">

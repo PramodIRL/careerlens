@@ -4,6 +4,7 @@ const PROFILE_BASE = `${API_BASE}/api/v1/profiles`;
 const RESUME_BASE = `${API_BASE}/api/v1/resumes`;
 const CANDIDATE_SKILL_BASE = `${API_BASE}/api/v1/candidate-skills`;
 const SKILL_PROFILE_BASE = `${API_BASE}/api/v1/skill-profile`;
+const SAVED_JOB_BASE = `${API_BASE}/api/v1/saved-jobs`;
 const GITHUB_CONNECTION_BASE = `${API_BASE}/api/v1/github-connection`;
 
 export interface AccessTokenResponse {
@@ -636,4 +637,110 @@ export async function getSkillProfile(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as SkillProfileResponse;
+}
+
+// --- Saved job descriptions (Prompt 4.1) -----------------------------
+
+/** Employment arrangements a saved posting can be labelled with. Mirrors
+ * the API's closed vocabulary. */
+export type EmploymentType =
+  "full_time" | "part_time" | "contract" | "internship" | "temporary";
+
+export interface SavedJobResponse {
+  id: string;
+  company: string;
+  title: string;
+  location: string | null;
+  employment_type: EmploymentType | null;
+  /** Metadata only. CareerLens never fetches this URL — it exists so the
+   * user can find the posting again. */
+  source_url: string | null;
+  /** The posting exactly as the user saved it. */
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedJobCreateRequest {
+  company: string;
+  title: string;
+  description: string;
+  location?: string | null;
+  employment_type?: EmploymentType | null;
+  source_url?: string | null;
+}
+
+/** PATCH body. An omitted field means "leave unchanged"; an explicit
+ * null clears an optional field. The three required fields cannot be
+ * nulled — the API rejects that with a 422. */
+export type SavedJobUpdateRequest = Partial<SavedJobCreateRequest>;
+
+/** The caller's saved jobs, newest first. The API only ever returns the
+ * caller's own. */
+export async function listSavedJobs(
+  accessToken: string,
+): Promise<SavedJobResponse[]> {
+  const response = await fetch(SAVED_JOB_BASE, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as SavedJobResponse[];
+}
+
+/** Save a posting. The owner comes from the access token — this never
+ * sends a user id, and the API would reject one if it did. */
+export async function createSavedJob(
+  accessToken: string,
+  body: SavedJobCreateRequest,
+): Promise<SavedJobResponse> {
+  const response = await fetch(SAVED_JOB_BASE, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as SavedJobResponse;
+}
+
+export async function updateSavedJob(
+  accessToken: string,
+  savedJobId: string,
+  body: SavedJobUpdateRequest,
+): Promise<SavedJobResponse> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as SavedJobResponse;
+}
+
+export async function deleteSavedJob(
+  accessToken: string,
+  savedJobId: string,
+): Promise<void> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
 }
