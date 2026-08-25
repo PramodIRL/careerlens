@@ -12,6 +12,11 @@ const createSavedJobMock = vi.fn();
 const updateSavedJobMock = vi.fn();
 const deleteSavedJobMock = vi.fn();
 const importJobFromPdfMock = vi.fn();
+// JobsSection renders a JobMatchPanel per job (Prompt 4.3), which
+// fetches its own score. Without this mock the panel makes a real
+// network call, fails, and renders a SECOND role="alert" — which made
+// the error-path assertions below intermittently ambiguous.
+const getJobMatchMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -25,6 +30,7 @@ vi.mock("@/lib/api-client", async () => {
     updateSavedJob: (...args: unknown[]) => updateSavedJobMock(...args),
     deleteSavedJob: (...args: unknown[]) => deleteSavedJobMock(...args),
     importJobFromPdf: (...args: unknown[]) => importJobFromPdfMock(...args),
+    getJobMatch: (...args: unknown[]) => getJobMatchMock(...args),
   };
 });
 
@@ -71,6 +77,24 @@ beforeEach(() => {
   updateSavedJobMock.mockReset();
   deleteSavedJobMock.mockReset();
   importJobFromPdfMock.mockReset();
+  getJobMatchMock.mockReset().mockResolvedValue({
+    formula_version: "skill_match_v1",
+    overall_score: 0,
+    earned_weight: 0,
+    obtainable_weight: 0,
+    has_requirements: false,
+    required_matched: 0,
+    required_total: 0,
+    by_level: {
+      required: { matched: 0, total: 0 },
+      preferred: { matched: 0, total: 0 },
+      mentioned: { matched: 0, total: 0 },
+    },
+    weights: { required: 3, preferred: 2, mentioned: 1 },
+    matched_skills: [],
+    missing_skills: [],
+    required_missing: [],
+  });
 });
 
 // --- loading / empty / list ------------------------------------------

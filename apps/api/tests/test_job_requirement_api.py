@@ -452,3 +452,37 @@ def test_extraction_does_not_break_a_job_with_an_unseeded_taxonomy(
     job_id = _create_job(client, token, "Python and Docker are required.")
 
     assert _requirements(client, token, job_id) == []
+
+
+def test_the_real_world_capability_case_end_to_end(client: TestClient) -> None:
+    """The exact browser string that exposed the 4.2 gap.
+
+    "Should be able to write queries" states an expected capability, so
+    SQL must be REQUIRED rather than merely mentioned — under-classifying
+    it distorts the 4.3 match score downstream.
+    """
+    _seed_taxonomy()
+    token = _token(client)
+    job_id = _create_job(client, token, "Databases (SQL) Should be able to write queries")
+
+    assert _levels(client, token, job_id) == {"SQL": "required"}
+
+
+def test_a_mixed_posting_keeps_every_level_distinct(client: TestClient) -> None:
+    """Regression over all four outcomes at once: capability phrasing
+    must not bleed into the neighbouring clauses, and negation must
+    still win."""
+    _seed_taxonomy()
+    token = _token(client)
+    job_id = _create_job(
+        client,
+        token,
+        "Should be able to write SQL. Docker is a plus. We also use Redis. Java is not required.",
+    )
+
+    assert _levels(client, token, job_id) == {
+        "SQL": "required",
+        "Docker": "preferred",
+        "Redis": "mentioned",
+        "Java": "mentioned",
+    }
