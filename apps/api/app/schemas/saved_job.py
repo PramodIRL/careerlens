@@ -467,3 +467,103 @@ class JobMatchResponse(BaseModel):
     # The subset of missing_skills the job marks required — the ones
     # that actually block the candidate.
     required_missing: list[MissingSkillResponse] = []
+
+
+# --------------------------------------------------------------------
+# Explainable skill gaps (Prompt 4.4)
+#
+# READ-ONLY PRESENTATION MODELS. Nothing below is persisted: gaps are
+# recomputed from current rows on every request. See
+# app/api/v1/saved_job.py.
+# --------------------------------------------------------------------
+
+
+class GapEntryResponse(BaseModel):
+    """One job requirement the candidate does not currently satisfy,
+    with everything needed to explain why.
+
+    THE API SUPPLIES FACTS, THE UI SUPPLIES WORDING. `job_excerpt` is a
+    verbatim slice of the saved job's description and
+    `candidate_evidence` are real `skill_evidence` rows. Nothing here is
+    generated prose, and a genuinely missing skill carries an EMPTY
+    evidence list rather than an invented sentence saying so.
+
+    `candidate_status` is null when no candidate_skills row exists at
+    all — which is a different thing from a row that says "rejected",
+    and the two must stay distinguishable.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    skill_id: UUID
+    skill_name: str
+    # Preserved from the job requirement, so a rejected REQUIRED skill
+    # is still visibly required.
+    requirement_level: RequirementLevelSchema
+    job_excerpt: str
+    # "confirmed" / "suggested" / "rejected", or null when the candidate
+    # has no row for this skill.
+    candidate_status: str | None
+    # Populated for needs-confirmation and rejected entries, where real
+    # stored evidence exists. Empty for genuinely missing skills.
+    candidate_evidence: list[MatchedEvidenceResponse] = []
+
+
+class GapTotalsResponse(BaseModel):
+    """Counts per bucket, so a client can summarise without re-counting
+    arrays it may not have rendered."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    required_gaps: int
+    preferred_gaps: int
+    informational_gaps: int
+    needs_confirmation: int
+    rejected_requirements: int
+    satisfied: int
+    total_requirements: int
+
+
+class JobGapResponse(BaseModel):
+    """Explainable skill gaps for one saved job.
+
+    FIVE BUCKETS, DELIBERATELY NOT ONE "missing" LIST. The product
+    question is not just "what am I missing" but "why is this a gap",
+    and three of those answers are materially different to a person:
+
+        required/preferred/informational_gaps
+            we found no candidate skill for this at all
+        needs_confirmation
+            we DID find evidence — you just have not reviewed it
+        rejected_requirements
+            you told us this is not yours
+
+    Collapsing them would report a skill the user deliberately rejected
+    as though the system simply failed to find it.
+
+    NOT PERSISTED. Gap state changes when a skill is confirmed,
+    rejected or manually added, when resume or GitHub evidence changes,
+    and when a job description edit reconciles requirements — six
+    invalidation triggers, several firing from Celery workers outside
+    any request. A stored gap row would be stale almost immediately.
+
+    `formula_version` is SEPARATE from `skill_match_v1`: the bucketing
+    policy here can evolve without implying the score changed.
+
+    BUCKETS ARE ORDERED required -> preferred -> informational ->
+    needs_confirmation -> rejected, and entries within each bucket are
+    sorted by skill name rather than insertion order, so two identical
+    requests return byte-identical JSON. That ordering reflects the
+    STORED REQUIREMENT LEVEL only and claims nothing about career
+    importance.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    formula_version: str
+    required_gaps: list[GapEntryResponse] = []
+    preferred_gaps: list[GapEntryResponse] = []
+    informational_gaps: list[GapEntryResponse] = []
+    needs_confirmation: list[GapEntryResponse] = []
+    rejected_requirements: list[GapEntryResponse] = []
+    totals: GapTotalsResponse

@@ -17,6 +17,9 @@ const importJobFromPdfMock = vi.fn();
 // network call, fails, and renders a SECOND role="alert" — which made
 // the error-path assertions below intermittently ambiguous.
 const getJobMatchMock = vi.fn();
+// Same reason as getJobMatch above: JobsSection now also renders a
+// JobGapPanel per job, which fetches on its own.
+const getJobGapsMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -31,6 +34,7 @@ vi.mock("@/lib/api-client", async () => {
     deleteSavedJob: (...args: unknown[]) => deleteSavedJobMock(...args),
     importJobFromPdf: (...args: unknown[]) => importJobFromPdfMock(...args),
     getJobMatch: (...args: unknown[]) => getJobMatchMock(...args),
+    getJobGaps: (...args: unknown[]) => getJobGapsMock(...args),
   };
 });
 
@@ -94,6 +98,23 @@ beforeEach(() => {
     matched_skills: [],
     missing_skills: [],
     required_missing: [],
+  });
+  getJobGapsMock.mockReset().mockResolvedValue({
+    formula_version: "skill_gap_v1",
+    required_gaps: [],
+    preferred_gaps: [],
+    informational_gaps: [],
+    needs_confirmation: [],
+    rejected_requirements: [],
+    totals: {
+      required_gaps: 0,
+      preferred_gaps: 0,
+      informational_gaps: 0,
+      needs_confirmation: 0,
+      rejected_requirements: 0,
+      satisfied: 0,
+      total_requirements: 0,
+    },
   });
 });
 

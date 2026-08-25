@@ -39,6 +39,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.auth import get_current_user
 from app.db import get_db
 from app.job_requirements.extract import extract_job_requirements, list_job_requirements
+from app.matching.resolve import (
+    ResolutionState,
+    resolve_requirements,
+)
 from app.matching.score import RequirementInput, compute_score
 from app.models.candidate_skill import CandidateSkill
 from app.models.saved_job import SavedJob
@@ -46,6 +50,9 @@ from app.models.skill import Skill
 from app.models.skill_evidence import SkillEvidence
 from app.models.user import User
 from app.schemas.saved_job import (
+    GapEntryResponse,
+    GapTotalsResponse,
+    JobGapResponse,
     JobMatchResponse,
     JobSkillRequirementResponse,
     LevelBreakdownResponse,
@@ -58,9 +65,12 @@ from app.schemas.saved_job import (
     SavedJobResponse,
     SavedJobUpdateRequest,
 )
-from app.schemas.skill import CandidateSkillStatus
 
 router = APIRouter()
+
+# Separate from skill_match_v1 on purpose: the gap BUCKETING policy can
+# evolve without implying the score formula changed.
+GAP_FORMULA_VERSION = "skill_gap_v1"
 
 _NOT_FOUND = "saved job not found"
 _NOT_YOURS = "not authorized to access this saved job"
@@ -260,24 +270,12 @@ async def read_saved_job_requirements(
     ]
 
 
-# Candidate review states that can SATISFY a job requirement.
-#
-# "confirmed" is the user's own assertion, and counts even with no
-# evidence left — the existing, tested semantics after a resume is
-# deleted or GitHub is disconnected.
-#
-# "suggested" counts too: an extractor found real, persisted evidence
-# and the user simply has not reviewed it yet. Discarding it would score
-# every new candidate at 0% until they clicked through every skill,
-# which measures their attention rather than their ability. The
-# distinction is surfaced per skill as `candidate_unreviewed` instead.
-#
-# "rejected" is deliberately absent. It is a persistent tombstone
-# (app/schemas/skill.py), and must never satisfy a requirement however
-# much stale evidence still hangs off it.
-_POSITIVE_STATUSES = frozenset(
-    {CandidateSkillStatus.CONFIRMED.value, CandidateSkillStatus.SUGGESTED.value}
-)
+# Candidate-side policy — which review states satisfy a requirement,
+# and how "missing" decomposes — lives in app/matching/resolve.py, and
+# BOTH this endpoint and the gap endpoint below call it. Implementing
+# that judgement twice would eventually let /match and /gaps disagree
+# about the same skill, which is exactly the contradiction that would
+# destroy trust in the explanation.
 
 
 @router.get("/{saved_job_id}/match", response_model=JobMatchResponse)
@@ -343,65 +341,74 @@ async def read_saved_job_match(
         ).all()
     }
 
-    matched_ids = [
-        skill_id for skill_id, row in candidate_skills.items() if row.status in _POSITIVE_STATUSES
-    ]
-    evidence_by_skill = await _load_match_evidence(db, candidate_skills, matched_ids)
+    # ONE resolution, shared with the gap endpoint. Both views of the
+    # same judgement come from the same function, so they cannot drift.
+    resolutions = resolve_requirements(
+        [
+            (row.skill_id, skills[row.skill_id].name, row.requirement_level, row.excerpt)
+            for row in requirements
+            if row.skill_id in skills
+        ],
+        {skill_id: row.status for skill_id, row in candidate_skills.items()},
+    )
+
+    # Evidence for every candidate skill this job touches — not only the
+    # satisfying ones, because a REJECTED requirement must be able to
+    # show the evidence the user disowned.
+    evidence_by_skill = await _load_match_evidence(db, candidate_skills, list(candidate_skills))
 
     score = compute_score(
         [
             RequirementInput(
-                skill_id=str(row.skill_id),
-                level=row.requirement_level,
-                satisfied=row.skill_id in set(matched_ids),
+                skill_id=str(item.skill_id),
+                level=item.requirement_level,
+                satisfied=item.satisfied,
             )
-            for row in requirements
+            for item in resolutions
         ]
     )
 
     matched: list[MatchedSkillResponse] = []
     missing: list[MissingSkillResponse] = []
-    for row in requirements:
-        skill = skills.get(row.skill_id)
-        if skill is None:  # pragma: no cover - FK guarantees it
-            continue
-        candidate = candidate_skills.get(row.skill_id)
-        if candidate is not None and candidate.status in _POSITIVE_STATUSES:
+    for item in resolutions:
+        if item.satisfied:
             matched.append(
                 MatchedSkillResponse(
-                    skill_id=row.skill_id,
-                    skill_name=skill.name,
-                    requirement_level=RequirementLevelSchema(row.requirement_level),
-                    job_excerpt=row.excerpt,
-                    candidate_status=candidate.status,
-                    candidate_unreviewed=(candidate.status == CandidateSkillStatus.SUGGESTED.value),
-                    candidate_evidence=[
-                        MatchedEvidenceResponse(
-                            source_type=item.source_type,
-                            excerpt=item.excerpt,
-                            confidence=float(item.confidence),
-                        )
-                        for item in evidence_by_skill.get(row.skill_id, [])
-                    ],
+                    skill_id=item.skill_id,
+                    skill_name=item.skill_name,
+                    requirement_level=RequirementLevelSchema(item.requirement_level),
+                    job_excerpt=item.job_excerpt,
+                    candidate_status=item.candidate_status or "",
+                    candidate_unreviewed=(item.state is ResolutionState.NEEDS_CONFIRMATION),
+                    candidate_evidence=_to_evidence(evidence_by_skill.get(item.skill_id, [])),
                 )
             )
         else:
             missing.append(
                 MissingSkillResponse(
-                    skill_id=row.skill_id,
-                    skill_name=skill.name,
-                    requirement_level=RequirementLevelSchema(row.requirement_level),
-                    job_excerpt=row.excerpt,
+                    skill_id=item.skill_id,
+                    skill_name=item.skill_name,
+                    requirement_level=RequirementLevelSchema(item.requirement_level),
+                    job_excerpt=item.job_excerpt,
                     # Distinguishes "never had it" from "explicitly
                     # disowned it" — very different messages.
-                    candidate_rejected=(
-                        candidate is not None
-                        and candidate.status == CandidateSkillStatus.REJECTED.value
-                    ),
+                    candidate_rejected=(item.state is ResolutionState.REJECTED),
                 )
             )
 
     return _to_match_response(score, matched, missing)
+
+
+def _to_evidence(rows: list[SkillEvidence]) -> list[MatchedEvidenceResponse]:
+    """Real stored evidence rows, never generated text."""
+    return [
+        MatchedEvidenceResponse(
+            source_type=row.source_type,
+            excerpt=row.excerpt,
+            confidence=float(row.confidence),
+        )
+        for row in rows
+    ]
 
 
 async def _load_match_evidence(
@@ -462,4 +469,144 @@ def _to_match_response(
         required_missing=[
             item for item in missing if item.requirement_level == RequirementLevelSchema.REQUIRED
         ],
+    )
+
+
+@router.get("/{saved_job_id}/gaps", response_model=JobGapResponse)
+async def read_saved_job_gaps(
+    saved_job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JobGapResponse:
+    """What this job asks for that the candidate does not satisfy, and
+    why.
+
+    BUILT ON THE SAME RESOLVER AS `/match`, so the two can never
+    contradict each other: a requirement `/match` reports as matched
+    cannot appear in any gap bucket here, and one it reports as missing
+    lands in exactly one. That consistency is structural rather than
+    something two test suites have to keep in step by hand.
+
+    STRICTLY READ-ONLY and NOT PERSISTED. Gap state changes when a skill
+    is confirmed, rejected or manually added, when resume or GitHub
+    evidence changes, and when a job edit reconciles requirements — and
+    several of those fire from Celery workers outside any request. A
+    stored gap row would be stale almost immediately, so it is derived
+    on read from four bounded queries.
+
+    IT COMPUTES NO SCORE. `skill_match_v1` stays in
+    app/matching/score.py and is not duplicated or re-derived here.
+
+    OWNERSHIP IS STRUCTURAL — the same `_get_owned_job` the rest of this
+    module uses, and the candidate is always the authenticated user.
+    """
+    saved_job = await _get_owned_job(db, saved_job_id, current_user)
+    requirements = await list_job_requirements(db, saved_job.id)
+
+    if not requirements:
+        return _empty_gap_response()
+
+    skill_ids = [row.skill_id for row in requirements]
+    skills = {
+        skill.id: skill
+        for skill in (await db.scalars(select(Skill).where(Skill.id.in_(skill_ids)))).all()
+    }
+    candidate_skills = {
+        row.skill_id: row
+        for row in (
+            await db.scalars(
+                select(CandidateSkill).where(
+                    CandidateSkill.user_id == current_user.id,
+                    CandidateSkill.skill_id.in_(skill_ids),
+                )
+            )
+        ).all()
+    }
+
+    resolutions = resolve_requirements(
+        [
+            (row.skill_id, skills[row.skill_id].name, row.requirement_level, row.excerpt)
+            for row in requirements
+            if row.skill_id in skills
+        ],
+        {skill_id: row.status for skill_id, row in candidate_skills.items()},
+    )
+    # Every candidate skill this job touches, so a REJECTED requirement
+    # can show the evidence the user disowned.
+    evidence_by_skill = await _load_match_evidence(db, candidate_skills, list(candidate_skills))
+
+    buckets: dict[str, list[GapEntryResponse]] = {
+        "required": [],
+        "preferred": [],
+        "mentioned": [],
+        "needs_confirmation": [],
+        "rejected": [],
+    }
+    satisfied = 0
+    for item in resolutions:
+        if item.state is ResolutionState.SATISFIED:
+            satisfied += 1
+            continue
+
+        entry = GapEntryResponse(
+            skill_id=item.skill_id,
+            skill_name=item.skill_name,
+            requirement_level=RequirementLevelSchema(item.requirement_level),
+            job_excerpt=item.job_excerpt,
+            candidate_status=item.candidate_status,
+            # Real rows for needs-confirmation and rejected; empty for a
+            # genuinely missing skill, never an invented sentence.
+            candidate_evidence=_to_evidence(evidence_by_skill.get(item.skill_id, [])),
+        )
+
+        if item.state is ResolutionState.NEEDS_CONFIRMATION:
+            # Evidence exists — calling this a gap would tell the user to
+            # go learn something they have already demonstrated.
+            buckets["needs_confirmation"].append(entry)
+        elif item.state is ResolutionState.REJECTED:
+            # The user's own decision, preserved and shown rather than
+            # reported back as an absence.
+            buckets["rejected"].append(entry)
+        else:
+            buckets[item.requirement_level].append(entry)
+
+    # Sorted by skill name, not insertion order, so two identical
+    # requests return byte-identical JSON.
+    for entries in buckets.values():
+        entries.sort(key=lambda entry: entry.skill_name)
+
+    return JobGapResponse(
+        formula_version=GAP_FORMULA_VERSION,
+        required_gaps=buckets["required"],
+        preferred_gaps=buckets["preferred"],
+        informational_gaps=buckets["mentioned"],
+        needs_confirmation=buckets["needs_confirmation"],
+        rejected_requirements=buckets["rejected"],
+        totals=GapTotalsResponse(
+            required_gaps=len(buckets["required"]),
+            preferred_gaps=len(buckets["preferred"]),
+            informational_gaps=len(buckets["mentioned"]),
+            needs_confirmation=len(buckets["needs_confirmation"]),
+            rejected_requirements=len(buckets["rejected"]),
+            satisfied=satisfied,
+            total_requirements=len(resolutions),
+        ),
+    )
+
+
+def _empty_gap_response() -> JobGapResponse:
+    """A job with no recognised requirements. Distinct from "you match
+    everything" — the UI must not congratulate a candidate for a job
+    that simply asks for nothing we recognise."""
+    return JobGapResponse(
+        formula_version=GAP_FORMULA_VERSION,
+        totals=GapTotalsResponse(
+            required_gaps=0,
+            preferred_gaps=0,
+            informational_gaps=0,
+            needs_confirmation=0,
+            rejected_requirements=0,
+            satisfied=0,
+            total_requirements=0,
+        ),
     )
