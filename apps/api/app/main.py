@@ -10,6 +10,7 @@ from app.api.v1.github_ingestion import router as github_ingestion_router
 from app.api.v1.health import router as health_router
 from app.api.v1.job_import import router as job_import_router
 from app.api.v1.profile import router as profile_router
+from app.api.v1.qualification import router as qualification_router
 from app.api.v1.resume import router as resume_router
 from app.api.v1.saved_job import router as saved_job_router
 from app.api.v1.skill_profile import router as skill_profile_router
@@ -60,6 +61,10 @@ app.include_router(saved_job_router, prefix="/api/v1/saved-jobs")
 # nothing. Only the saved-jobs router above creates a row.
 app.include_router(job_import_router, prefix="/api/v1/job-imports")
 app.include_router(candidate_skill_router, prefix="/api/v1/candidate-skills")
+# Prompt 5.1a — the candidate's own academic and experience facts.
+# Structurally self-scoped (no user id in the path): these are exam
+# results and graduation dates, so the surface has nothing to enumerate.
+app.include_router(qualification_router, prefix="/api/v1/qualifications")
 # Prompt 3.4 — the READ-ONLY presentation view over the same two tables
 # the candidate-skill routes above mutate. A separate prefix, not an
 # extension of /candidate-skills, so the mutation contract those routes

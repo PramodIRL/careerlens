@@ -149,7 +149,8 @@ def _clean_tables() -> None:
                         "skill_aliases, skill_relations, candidate_skills, "
                         "skill_evidence, github_connections, github_repositories, "
                         "github_repository_languages, github_repository_topics, "
-                        "github_ingestion_runs "
+                        "github_ingestion_runs, candidate_qualifications, "
+                        "job_eligibility_requirements, job_eligibility_requirement_values "
                         "RESTART IDENTITY CASCADE"
                     )
                 )

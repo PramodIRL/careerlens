@@ -22,13 +22,14 @@ put them. `make sample-resumes` exists so there is never a reason to.
 make sample-resumes
 ```
 
-This writes three documents to `apps/api/var/samples/`:
+This writes four documents to `apps/api/var/samples/`:
 
 | File | Who | Why it's in the set |
 | --- | --- | --- |
 | `backend-engineer.pdf` | Ada Sample | The main demo document — a dense, unambiguous resume that yields 12 skills |
 | `frontend-engineer.docx` | Rio Placeholder | The second file format, plus alias matching (`k8s` → Kubernetes at lower confidence) |
 | `career-changer.pdf` | Sam Invented | A sparse resume whose prose contains deliberate traps — see step 6 |
+| `campus-graduate.pdf` | Priya Placeholder | Carries an EDUCATION block (CGPA, Class X/XII, degree, branch, graduation year) and "Fresher" — the fixture for the dormant qualification extractor; uploading it extracts skills only |
 
 Every name, employer, school, email and phone number in them is invented.
 Emails use `example.com` (reserved by RFC 2606); phone numbers use the

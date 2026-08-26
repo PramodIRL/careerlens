@@ -111,7 +111,7 @@ stores the file on disk and its full extracted text in the database:
 make sample-resumes
 ```
 
-That writes three invented resumes (`example.com` addresses, `555-01xx`
+That writes four invented resumes (`example.com` addresses, `555-01xx`
 numbers, made-up employers) to `apps/api/var/samples/`. It writes **files
 only** — no users, no database rows — so the demo goes through the real
 upload → extraction → review path. `apps/api/var/` is gitignored, so a
@@ -132,6 +132,57 @@ make demo-github EMAIL=ada.sample@example.com
 That imports a fictional account (`apps/api/scripts/sample_github.py`)
 through the real ingestion pipeline, making no network request. The user
 must already exist — the script will not create one.
+
+## Eligibility
+
+Postings state two different kinds of requirement, and CareerLens keeps them
+apart. Skills go to `skill_match_v1` / `skill_gap_v1`; academic and
+experience bars — CGPA, Class 10/12 marks, degree, field of study,
+graduation year, years of experience — go to a separate `eligibility_v1`
+result that is **never folded into the skill score**.
+
+```
+GET /api/v1/saved-jobs/{id}/eligibility-requirements   what the posting asks
+GET /api/v1/saved-jobs/{id}/eligibility                how you compare
+GET|PATCH /api/v1/qualifications                       your own facts
+DELETE   /api/v1/qualifications/{fact}                 "that one isn't mine"
+```
+
+**One profile, every job.** Your qualifications are entered once on the
+dashboard and compared against every saved job's entry requirements — there
+is no qualification form inside a saved job, and no per-job copy of the data.
+Editing the profile updates every job's eligibility straight away.
+
+**Only what you have asserted counts.** Eligibility is computed from values
+you have actually confirmed; anything blank reads as *unknown*, never as a
+failure. A saved job whose requirements you have not answered says
+"Qualification profile not set up" and links to the form, rather than
+implying you fall short.
+
+Resume upload does **not** populate qualifications — it extracts skills and
+evidence, as before. The deterministic qualification extractor remains in the
+codebase, dormant and tested, for a future explicit "import from resume".
+
+Extraction is deterministic regex over a curated vocabulary — no LLM, no
+embeddings. Ambiguous prose produces no requirement rather than a guess.
+
+Four states, and two of them are not failures:
+
+| State | Meaning |
+|---|---|
+| `satisfied` | your value clears the bar |
+| `not_satisfied` | your value does not — the only state that blocks you |
+| `unknown` | you have not declared this yet |
+| `undetermined` | the posting cannot be evaluated as written |
+
+**A blank field never counts against you.** An undeclared CGPA is `unknown`,
+not a failure — the system supplies a missing *scale*, never a missing value.
+
+For the scale itself, an explicit one always wins: `"CGPA: 8.2/10"` reads as
+10 and `"3.6/4.0"` as 4. Where a posting writes no scale at all
+(`"minimum CGPA 7.5"`), it is stored as **/10** — the default is written onto
+the row and shown in the response, so you can see what was assumed. Say so on
+your profile if yours is out of 4.
 
 ## GitHub connection
 

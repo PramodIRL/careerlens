@@ -22,6 +22,7 @@ import {
   type SavedJobResponse,
 } from "@/lib/api-client";
 
+import JobEligibilityPanel from "./job-eligibility-panel";
 import JobGapPanel from "./job-gap-panel";
 import JobMatchPanel from "./job-match-panel";
 
@@ -541,6 +542,20 @@ export default function JobsSection({
                         Skill gaps
                       </h4>
                       <JobGapPanel
+                        accessToken={accessToken}
+                        savedJobId={job.id}
+                        refreshKey={refreshKey}
+                      />
+                    </div>
+                    {/* Eligibility sits BESIDE the score, never inside
+                        it. "82% skill match" and "does not meet the
+                        CGPA bar" are different kinds of claim, and the
+                        two are never combined into one number. */}
+                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                      <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
+                        Eligibility
+                      </h4>
+                      <JobEligibilityPanel
                         accessToken={accessToken}
                         savedJobId={job.id}
                         refreshKey={refreshKey}

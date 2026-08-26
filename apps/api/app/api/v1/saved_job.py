@@ -38,6 +38,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.auth import get_current_user
 from app.db import get_db
+from app.eligibility.extract import (
+    extract_job_eligibility,
+    list_job_eligibility_requirements,
+    requirement_type_of,
+)
+from app.eligibility.resolve import RequirementInput as EligibilityRequirementInput
+from app.eligibility.resolve import resolve_eligibility
 from app.job_requirements.extract import extract_job_requirements, list_job_requirements
 from app.matching.resolve import (
     ResolutionState,
@@ -45,10 +52,22 @@ from app.matching.resolve import (
 )
 from app.matching.score import RequirementInput, compute_score
 from app.models.candidate_skill import CandidateSkill
+from app.models.job_eligibility import JobEligibilityRequirement
 from app.models.saved_job import SavedJob
 from app.models.skill import Skill
 from app.models.skill_evidence import SkillEvidence
 from app.models.user import User
+from app.qualifications.store import has_profile, to_candidate_facts
+from app.qualifications.store import load_rows as load_qualification_rows
+from app.schemas.eligibility import (
+    Comparator,
+    EligibilityEntryResponse,
+    EligibilityExtractionMethod,
+    EligibilityRequirementResponse,
+    EligibilityRequirementType,
+    EligibilityTotalsResponse,
+    JobEligibilityResponse,
+)
 from app.schemas.saved_job import (
     GapEntryResponse,
     GapTotalsResponse,
@@ -121,6 +140,12 @@ async def create_saved_job(
     # extraction is part of saving the job. A failure rolls the whole
     # request back rather than storing a job with no requirements.
     await extract_job_requirements(db, saved_job)
+
+    # Prompt 5.1a: the job's qualification bars, derived in the SAME
+    # transaction as the skill requirements, so a job can never be
+    # stored with one of the two extractions stale. The two write to
+    # entirely separate tables and neither reads the other's.
+    await extract_job_eligibility(db, saved_job)
 
     await db.commit()
     await db.refresh(saved_job)
@@ -195,6 +220,7 @@ async def update_saved_job(
     # that PATCHes the whole object does not churn rows.
     if description_changed:
         await extract_job_requirements(db, saved_job)
+        await extract_job_eligibility(db, saved_job)
 
     await db.commit()
     await db.refresh(saved_job)
@@ -609,4 +635,155 @@ def _empty_gap_response() -> JobGapResponse:
             satisfied=0,
             total_requirements=0,
         ),
+    )
+
+
+# --------------------------------------------------------------------
+# Job eligibility (Prompt 5.1a)
+#
+# A SEPARATE DOMAIN FROM SKILLS, end to end. These two endpoints read
+# `job_eligibility_requirements` and `candidate_qualifications`, and
+# touch neither `skill_match_v1` nor `skill_gap_v1`. `/match` and
+# `/gaps` above are byte-for-byte what they were before this prompt —
+# no new field, no new input, no cap applied to the score. The two
+# answers sit beside each other in the UI and are never multiplied
+# together, because "82% skill match" and "does not meet the CGPA bar"
+# are different kinds of claim and collapsing them would destroy both.
+# --------------------------------------------------------------------
+
+
+@router.get(
+    "/{saved_job_id}/eligibility-requirements",
+    response_model=list[EligibilityRequirementResponse],
+)
+async def read_saved_job_eligibility_requirements(
+    saved_job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[EligibilityRequirementResponse]:
+    """The qualification bars extracted from this job's description.
+
+    The requirements themselves, with no candidate involved — the
+    eligibility counterpart of `/requirements`. Useful on its own for
+    showing what a posting demands before knowing anything about who is
+    asking.
+
+    An empty list when the description states no bar this extractor
+    recognises. That is the common case and is NOT an error: most
+    postings say nothing about CGPA.
+    """
+    saved_job = await _get_owned_job(db, saved_job_id, current_user)
+    rows = await list_job_eligibility_requirements(db, saved_job.id)
+    return [_to_requirement_response(row, values) for row, values in rows]
+
+
+def _to_requirement_response(
+    row: JobEligibilityRequirement, values: list[str]
+) -> EligibilityRequirementResponse:
+    return EligibilityRequirementResponse(
+        id=row.id,
+        requirement_type=EligibilityRequirementType(row.requirement_type),
+        comparator=Comparator(row.comparator),
+        numeric_value=row.numeric_value,
+        numeric_max=row.numeric_max,
+        value_scale=row.value_scale,
+        accepted_values=values,
+        requirement_level=row.requirement_level,
+        open_ended=row.open_ended,
+        matched_term=row.matched_term,
+        excerpt=row.excerpt,
+        confidence=float(row.confidence),
+        extraction_method=EligibilityExtractionMethod(row.extraction_method),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get("/{saved_job_id}/eligibility", response_model=JobEligibilityResponse)
+async def read_saved_job_eligibility(
+    saved_job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JobEligibilityResponse:
+    """How the authenticated candidate stands against this job's bars.
+
+    STRICTLY READ-ONLY AND NOT PERSISTED, for a sharper version of the
+    reason `/match` and `/gaps` are: this answer changes for EVERY saved
+    job the moment the candidate edits one field of their own
+    qualifications. A stored verdict would have no way to observe that,
+    so it is derived from four bounded queries on every request.
+
+    UNKNOWN IS NOT FAILURE. A candidate who has declared nothing gets
+    `unknown` against every bar and an overall flag of `unknown` — never
+    `not_eligible`. Only a value we actually hold, failing a bar we
+    actually understood, makes anyone ineligible. See
+    app/eligibility/resolve.py.
+
+    IT COMPUTES NO SKILL SCORE and does not read a single skill row.
+    """
+    saved_job = await _get_owned_job(db, saved_job_id, current_user)
+    rows = await list_job_eligibility_requirements(db, saved_job.id)
+
+    inputs: list[EligibilityRequirementInput] = []
+    excerpt_by_type: dict[str, str] = {}
+    for row, values in rows:
+        requirement_type = requirement_type_of(row)
+        if requirement_type is None:
+            # Written by a newer version than this deployment knows.
+            # Skipped rather than raising — see requirement_type_of.
+            continue
+        inputs.append(
+            EligibilityRequirementInput(
+                requirement_type=requirement_type,
+                comparator=Comparator(row.comparator),
+                requirement_level=row.requirement_level,
+                numeric_value=row.numeric_value,
+                numeric_max=row.numeric_max,
+                value_scale=row.value_scale,
+                accepted_values=tuple(values),
+                open_ended=row.open_ended,
+                excerpt=row.excerpt,
+                requirement_id=row.id,
+            )
+        )
+        excerpt_by_type[requirement_type.value] = row.excerpt
+
+    qualification_rows = await load_qualification_rows(db, current_user.id)
+    # Only CONFIRMED facts are authoritative — see
+    # app/qualifications/store.py. A resume-derived suggestion nobody
+    # has accepted reads as UNKNOWN, never as a value that counts.
+    facts = to_candidate_facts(qualification_rows)
+    result = resolve_eligibility(inputs, facts)
+
+    return JobEligibilityResponse(
+        formula_version=result.formula_version,
+        flag=result.flag,
+        has_requirements=result.has_requirements,
+        has_qualification_profile=has_profile(qualification_rows),
+        totals=EligibilityTotalsResponse(
+            satisfied=result.totals.satisfied,
+            not_satisfied=result.totals.not_satisfied,
+            unknown=result.totals.unknown,
+            undetermined=result.totals.undetermined,
+            total_requirements=result.totals.total_requirements,
+            required_not_satisfied=result.totals.required_not_satisfied,
+        ),
+        requirements=[
+            EligibilityEntryResponse(
+                requirement_type=resolution.requirement.requirement_type,
+                state=resolution.state,
+                comparator=resolution.requirement.comparator,
+                requirement_numeric=resolution.requirement.numeric_value,
+                requirement_max=resolution.requirement.numeric_max,
+                requirement_scale=resolution.requirement.value_scale,
+                accepted_values=list(resolution.requirement.accepted_values),
+                requirement_level=resolution.requirement.requirement_level,
+                candidate_numeric=resolution.candidate_numeric,
+                candidate_text=resolution.candidate_text,
+                candidate_scale=resolution.candidate_scale,
+                reason=resolution.reason,
+                excerpt=excerpt_by_type.get(resolution.requirement.requirement_type.value, ""),
+            )
+            for resolution in result.resolutions
+        ],
     )
