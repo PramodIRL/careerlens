@@ -15,7 +15,21 @@ from app.settings import get_settings
 # Dedicated Postgres schema used only by the test suite, so tests never
 # read or write the dev database's default ("public") schema.
 TEST_SCHEMA = "careerlens_test"
-_SEARCH_PATH_CONNECT_ARGS = {"server_settings": {"search_path": TEST_SCHEMA}}
+# `public` trails the test schema on the search path because that is
+# where the pgvector EXTENSION lives — an extension belongs to exactly
+# one schema per database, and both `infra/postgres/init.sql` and the
+# enable-pgvector migration install it into `public`. Without it on the
+# path, creating the `embeddings` table fails with `type "vector" does
+# not exist`.
+#
+# This does not weaken the isolation the schema exists for: every
+# product table is created in TEST_SCHEMA by `Base.metadata.create_all`
+# below, and TEST_SCHEMA comes first, so a table name always resolves
+# there. Only names that exist in NEITHER schema-qualified place — in
+# practice, the extension's `vector` type — fall through to `public`.
+# It is also how a real deployment is arranged: extensions in `public`,
+# on the path, with the application's own tables wherever they live.
+_SEARCH_PATH_CONNECT_ARGS = {"server_settings": {"search_path": f"{TEST_SCHEMA},public"}}
 
 
 # Test engines use NullPool (see the calls below).
@@ -104,13 +118,29 @@ def _isolated_test_schema() -> Generator[None, None, None]:
         )
         try:
             async with engine.begin() as conn:
-                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{TEST_SCHEMA}"'))
+                # Dropped first, so the schema is always built from
+                # scratch. Only ever names TEST_SCHEMA — never the dev
+                # schema — and it makes `checkfirst=False` below sound:
+                # a run that crashed before its teardown would otherwise
+                # leave tables behind for the next run to trip over.
+                await conn.execute(text(f'DROP SCHEMA IF EXISTS "{TEST_SCHEMA}" CASCADE'))
+                await conn.execute(text(f'CREATE SCHEMA "{TEST_SCHEMA}"'))
             async with engine.begin() as conn:
                 # Tables are created straight from current ORM metadata,
                 # not by replaying the Alembic migration chain — faster
                 # for tests. Migration correctness itself is verified
                 # separately, by actually running `alembic upgrade head`.
-                await conn.run_sync(Base.metadata.create_all)
+                #
+                # checkfirst=False is REQUIRED, not an optimisation.
+                # `public` trails TEST_SCHEMA on the search path (see
+                # above), and the default checkfirst=True resolves "does
+                # this table exist?" through that path — so it would find
+                # the DEV schema's `users`, `skills` and the rest, decide
+                # they already exist, and create nothing in TEST_SCHEMA.
+                # Every test would then silently read and write the dev
+                # database. Creating unconditionally into a schema we
+                # just made empty is what keeps the isolation real.
+                await conn.run_sync(Base.metadata.create_all, checkfirst=False)
         finally:
             await engine.dispose()
 
@@ -150,7 +180,8 @@ def _clean_tables() -> None:
                         "skill_evidence, github_connections, github_repositories, "
                         "github_repository_languages, github_repository_topics, "
                         "github_ingestion_runs, candidate_qualifications, "
-                        "job_eligibility_requirements, job_eligibility_requirement_values "
+                        "job_eligibility_requirements, job_eligibility_requirement_values, "
+                        "embeddings "
                         "RESTART IDENTITY CASCADE"
                     )
                 )

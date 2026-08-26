@@ -135,6 +135,31 @@ class Settings(BaseSettings):
     # own setting so the two can diverge.
     job_pdf_max_size_bytes: int = 5 * 1024 * 1024
 
+    # --- Embeddings (embedding infrastructure slice) -----------------
+    # THERE IS NO EMBEDDING CREDENTIAL HERE AND NO VARIABLE NAME FOR
+    # ONE. The only provider that exists is a deterministic local mock;
+    # nothing in this product calls an embedding API, and adding a real
+    # provider is a later slice that will bring its own decision about
+    # where its key lives.
+    #
+    # Which provider `get_embedding_provider()` builds. "mock" is the
+    # only known value; an unknown name raises rather than falling back,
+    # so a typo cannot silently fill the table with fake vectors
+    # labelled as something else.
+    embedding_provider: str = "mock"
+    # The width of the vectors the PROVIDER produces. The COLUMN's width
+    # is fixed at 384 by the migration and by
+    # app/models/embedding.py's EMBEDDING_DIMENSION — this setting
+    # exists so a provider can be pointed at a different width, and
+    # app/embeddings/store.py fails loudly if the two disagree rather
+    # than letting PostgreSQL reject the insert. Changing the column
+    # itself is a migration, not a configuration change.
+    embedding_dimension: int = 384
+    # Stored with every vector and part of the deduplication identity,
+    # so changing it means "re-embed under a new model" rather than
+    # "relabel the existing rows". Named to be unmistakably a fake.
+    embedding_model_identifier: str = "mock-deterministic-v1"
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""

@@ -14,6 +14,107 @@ Add one entry per decision, most recent first.
 
 ---
 
+- **Date**: 2026-08-27
+- **Decision**: Fix ONE embedding dimension for the project — **384** —
+  as a schema constant (`app/models/embedding.py`'s
+  `EMBEDDING_DIMENSION`, and the literal `vector(384)` in migration
+  `59ae0cc1cf6b`), rather than supporting several widths.
+- **Problem**: pgvector columns are fixed-width, and no prior prompt had
+  chosen a dimension. Supporting more than one means either a column per
+  width or a dimension-per-row design, and every query then has to know
+  which family it is reading.
+- **Alternatives**: (1) a nullable/variable `vector` column with the
+  dimension stored per row; (2) one table per model family; (3) defer
+  the choice and store vectors as `float[]`.
+- **Trade-off**: 384 is the width of `all-MiniLM-L6-v2`, the most likely
+  first real provider, so the column probably survives that arrival
+  unchanged — but a provider with a different width (OpenAI's 1536)
+  needs a migration, not a config change. `EMBEDDING_DIMENSION` in the
+  environment configures the PROVIDER only; `app/embeddings/store.py`
+  raises `EmbeddingDimensionError` when the two disagree, which turns a
+  silent mismatch into a readable failure.
+- **Outcome**: Single documented dimension of 384.
+
+- **Date**: 2026-08-27
+- **Decision**: Write a ~90-line `Vector` SQLAlchemy `UserDefinedType`
+  (`app/embeddings/vector_type.py`) instead of adding the `pgvector`
+  Python package.
+- **Problem**: The column needs DDL that emits `vector(384)` and a value
+  conversion asyncpg accepts — asyncpg has no codec for an extension
+  type, so the value travels in pgvector's text form with a CAST on the
+  way in.
+- **Alternatives**: Add `pgvector>=0.5` (resolves clean, zero transitive
+  dependencies) and use `pgvector.sqlalchemy.Vector`.
+- **Trade-off**: The package's real value is its distance operators
+  (`<->`, `<=>`, `<#>`), and this slice is explicitly forbidden from
+  computing similarity or querying nearest neighbours — so adopting it
+  now would be a dependency for an API we may not call (CLAUDE.md rule
+  6). The cost is ~90 lines we own, including a float32 rounding detail
+  that the package would have handled. Swapping to it later is an import
+  change plus a no-op migration; the database-side column is identical
+  either way.
+- **Outcome**: Custom type for now; adopt `pgvector` in the slice that
+  actually runs a similarity query.
+
+- **Date**: 2026-08-27
+- **Decision**: Put `user_id` inside the embedding uniqueness key —
+  `UNIQUE(user_id, source_type, source_id, chunk_index,
+  model_identifier)` — rather than deriving ownership through a join
+  the way `skill_evidence` does.
+- **Problem**: `source_type`/`source_id` is a polymorphic string pair
+  with no foreign key behind it, so there is no single join that proves
+  ownership across all three source kinds. Ownership enforced only in
+  application code is a check someone eventually forgets to write.
+- **Alternatives**: (1) no `user_id` column, reaching the owner through
+  each source table (the `skill_evidence` pattern); (2) a `user_id`
+  column outside the unique key, filtered on by convention.
+- **Trade-off**: A denormalized owner can in principle drift from its
+  source row's owner — the exact risk `skill_evidence` avoids by not
+  storing one. Accepted because there is no join to drift *against* for
+  a polymorphic key, and because it buys a structural guarantee: no read
+  path in `app/embeddings/store.py` can address a row without naming
+  whose it is, and two users referencing the same `source_id` get
+  separate rows instead of silently sharing one.
+- **Outcome**: `user_id` is NOT NULL and part of the natural key.
+
+- **Date**: 2026-08-27
+- **Decision**: Store only `content_hash` for embedded text — no source
+  text column on `embeddings` — and explain a chunk with
+  `char_start`/`char_end` offsets into the source row instead.
+- **Problem**: Semantic retrieval later needs to show *where* a chunk
+  came from, which normally argues for keeping the chunk text beside the
+  vector.
+- **Alternatives**: Store the chunk text alongside the vector.
+- **Trade-off**: Reading a chunk back now costs a join to its source
+  row, and for `skill_evidence`-derived documents there is no contiguous
+  span at all, so the offsets are NULL there. In exchange, no second
+  copy of private resume prose exists on a different access path, and a
+  chunk is provably the same characters the source still holds.
+- **Outcome**: Hash plus offsets; `app/embeddings/content.py` guarantees
+  `chunk.text == source[char_start:char_end]`.
+
+- **Date**: 2026-08-27
+- **Decision**: Add `public` after `careerlens_test` on the test
+  suite's `search_path` (`apps/api/tests/conftest.py`).
+- **Problem**: A PostgreSQL extension belongs to exactly one schema per
+  database, and pgvector is installed into `public` by both
+  `infra/postgres/init.sql` and migration `5b0b21f962b1`. With the test
+  search path set to the isolated schema alone, creating a table with a
+  `vector` column fails with `type "vector" does not exist`.
+- **Alternatives**: (1) schema-qualify the type as `public.vector` in
+  `app/embeddings/vector_type.py`; (2) install a second copy of the
+  extension into the test schema (not possible — one instance per
+  database).
+- **Trade-off**: Slightly weaker isolation in principle: a name absent
+  from `careerlens_test` now falls through to `public` instead of
+  failing. In practice every product table is created in the test schema
+  by `Base.metadata.create_all` and the test schema is searched first, so
+  the only name that actually falls through is the extension's type.
+  Option (1) was rejected because it hard-codes a schema into
+  application code that a differently-provisioned database would break.
+- **Outcome**: `search_path = careerlens_test,public`, matching how a
+  real deployment is arranged (extensions in `public`, on the path).
+
 - **Date**: 2026-08-22
 - **Decision**: Isolate `apps/api` tests with a dedicated Postgres *schema*
   (`careerlens_test`), created/dropped by the test suite itself, rather than

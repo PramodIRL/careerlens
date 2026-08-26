@@ -1,5 +1,6 @@
 from app.models.candidate_qualification import CandidateQualification
 from app.models.candidate_skill import CandidateSkill
+from app.models.embedding import Embedding
 from app.models.github_connection import GitHubConnection
 from app.models.github_ingestion_run import GitHubIngestionRun
 from app.models.github_repository import (
@@ -23,6 +24,7 @@ from app.models.user import User
 __all__ = [
     "CandidateQualification",
     "CandidateSkill",
+    "Embedding",
     "GitHubConnection",
     "GitHubIngestionRun",
     "GitHubRepository",

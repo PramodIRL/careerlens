@@ -308,6 +308,36 @@ SHA-256 hash of the random value handed to the client — see
 retries a refresh once on mount, so a page reload doesn't look
 logged-out as long as the cookie is still valid.
 
+## Embeddings
+
+Infrastructure only — nothing here is wired into matching, gaps,
+eligibility or the UI. There is no endpoint, no similarity function and
+no retrieval path; `skill_match_v1` and `skill_gap_v1` are unaware the
+table exists. What this provides is the interface and the storage a
+later semantic-retrieval slice needs.
+
+- **Provider** — `app/embeddings/provider.py` defines a one-method
+  `EmbeddingProvider` protocol. The only implementation is
+  `MockEmbeddingProvider`, which derives a vector deterministically from
+  SHA-256 so the same text gives the same vector in any process, on any
+  machine. **No embedding API is called and no credential exists.**
+- **Dimension** — **384**, fixed. The column is `vector(384)`; changing
+  it is a migration, not a setting. See `docs/decisions.md`.
+- **Storage** — `embeddings`, keyed
+  `UNIQUE(user_id, source_type, source_id, chunk_index,
+  model_identifier)`. Re-embedding unchanged content is skipped by
+  comparing a stored SHA-256 `content_hash`, so a real provider would
+  not be billed for it; changed content updates in place, and a new
+  model identifier writes a sibling row.
+- **What gets embedded** — job-description chunks, skill-evidence
+  excerpts, and public repository summaries. Never the full resume text,
+  a storage key, a README body, or anything from auth or session state.
+  `app/embeddings/content.py` is the single place that decides.
+
+```bash
+cd apps/api && uv run pytest tests/test_embeddings.py tests/test_embedding_store.py
+```
+
 ## Migrations
 
 Schema changes are tracked with [Alembic](https://alembic.sqlalchemy.org/).
