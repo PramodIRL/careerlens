@@ -160,6 +160,38 @@ PGCE, College of Make Believe (2019)
 """
 
 
+# The qualification document (Prompt 5.1b). Its EDUCATION block carries
+# every fact app/qualifications/extract.py reads — CGPA without a stated
+# scale, both school percentages, degree, field, graduation year — and
+# its experience line says "Fresher", which is the one phrasing that
+# yields a real zero rather than UNKNOWN. Deliberately a SEPARATE
+# document rather than education added to the three above: those are
+# asserted on by tests/test_demo_end_to_end.py and
+# tests/test_mvp_acceptance.py, and editing them would perturb Phase 4.
+_CAMPUS_GRADUATE = f"""{FICTION_NOTICE}
+
+Priya Placeholder
+Final-year Student - Example City, Fictionia
+priya.placeholder@example.com | 555-0188
+
+EDUCATION
+B.Tech in Computer Science, Invented Institute of Technology (2022 - 2026)
+CGPA: 8.2
+Class X: 91%
+Class XII: 88%
+
+SKILLS
+Languages: Python, SQL
+Tools: Git, Docker
+
+EXPERIENCE
+Fresher - seeking a first backend role.
+
+PROJECTS
+Built a small Flask service for the college library.
+"""
+
+
 SAMPLE_RESUMES: tuple[SampleResume, ...] = (
     SampleResume(
         slug="backend-engineer",
@@ -178,6 +210,12 @@ SAMPLE_RESUMES: tuple[SampleResume, ...] = (
         filename="career-changer.pdf",
         content_type=PDF_CONTENT_TYPE,
         text=_CAREER_CHANGER,
+    ),
+    SampleResume(
+        slug="campus-graduate",
+        filename="campus-graduate.pdf",
+        content_type=PDF_CONTENT_TYPE,
+        text=_CAMPUS_GRADUATE,
     ),
 )
 

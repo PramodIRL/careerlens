@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth-context";
 import GitHubSection from "./github-section";
 import JobsSection from "./jobs-section";
 import ProfileForm from "./profile-form";
+import QualificationsSection from "./qualifications-section";
 import ResumeSection from "./resume-section";
 import SkillProfileSection from "./skill-profile-section";
 import SkillsSection from "./skills-section";
@@ -40,6 +41,13 @@ export default function DashboardPage() {
   // completions in quick succession cannot collapse into one refetch.
   const [externalVersion, setExternalVersion] = useState(0);
   const [profileVersion, setProfileVersion] = useState(0);
+  //   qualificationVersion  the candidate edited their ONE reusable
+  //                         qualification profile. Only the saved-job
+  //                         eligibility panels care. Kept separate from
+  //                         externalVersion so a profile edit does not
+  //                         make the skill sections refetch data that
+  //                         cannot have changed.
+  const [qualificationVersion, setQualificationVersion] = useState(0);
 
   // Stable identities — these are effect dependencies in the children,
   // so an inline arrow would re-run those effects on every render.
@@ -49,6 +57,11 @@ export default function DashboardPage() {
   );
   const handleSkillsChanged = useCallback(
     () => setProfileVersion((n) => n + 1),
+    [],
+  );
+
+  const handleQualificationsChanged = useCallback(
+    () => setQualificationVersion((n) => n + 1),
     [],
   );
 
@@ -133,6 +146,23 @@ export default function DashboardPage() {
         />
       </div>
 
+      <div
+        id="qualifications"
+        tabIndex={-1}
+        className="w-full max-w-sm scroll-mt-4"
+      >
+        <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
+          Your qualifications
+        </h2>
+        {/* Declaring a fact here changes the eligibility answer for
+            EVERY saved job at once, so it bumps the same counter the
+            job panels already listen to. */}
+        <QualificationsSection
+          accessToken={accessToken}
+          onChanged={handleQualificationsChanged}
+        />
+      </div>
+
       <div className="w-full max-w-sm">
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your saved jobs
@@ -142,7 +172,7 @@ export default function DashboardPage() {
             same signals the skill sections already listen to. */}
         <JobsSection
           accessToken={accessToken}
-          refreshKey={externalVersion + profileVersion}
+          refreshKey={externalVersion + profileVersion + qualificationVersion}
         />
       </div>
 

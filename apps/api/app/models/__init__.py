@@ -1,3 +1,4 @@
+from app.models.candidate_qualification import CandidateQualification
 from app.models.candidate_skill import CandidateSkill
 from app.models.github_connection import GitHubConnection
 from app.models.github_ingestion_run import GitHubIngestionRun
@@ -5,6 +6,10 @@ from app.models.github_repository import (
     GitHubRepository,
     GitHubRepositoryLanguage,
     GitHubRepositoryTopic,
+)
+from app.models.job_eligibility import (
+    JobEligibilityRequirement,
+    JobEligibilityRequirementValue,
 )
 from app.models.job_requirement import JobSkillRequirement
 from app.models.profile import Profile, ProfileTargetRole, ProfileTargetSkill
@@ -16,12 +21,15 @@ from app.models.skill_evidence import SkillEvidence
 from app.models.user import User
 
 __all__ = [
+    "CandidateQualification",
     "CandidateSkill",
     "GitHubConnection",
     "GitHubIngestionRun",
     "GitHubRepository",
     "GitHubRepositoryLanguage",
     "GitHubRepositoryTopic",
+    "JobEligibilityRequirement",
+    "JobEligibilityRequirementValue",
     "JobSkillRequirement",
     "Profile",
     "ProfileTargetRole",

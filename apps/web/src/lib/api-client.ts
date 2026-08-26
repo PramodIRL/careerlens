@@ -6,6 +6,7 @@ const CANDIDATE_SKILL_BASE = `${API_BASE}/api/v1/candidate-skills`;
 const SKILL_PROFILE_BASE = `${API_BASE}/api/v1/skill-profile`;
 const SAVED_JOB_BASE = `${API_BASE}/api/v1/saved-jobs`;
 const JOB_IMPORT_BASE = `${API_BASE}/api/v1/job-imports`;
+const QUALIFICATIONS_BASE = `${API_BASE}/api/v1/qualifications`;
 const GITHUB_CONNECTION_BASE = `${API_BASE}/api/v1/github-connection`;
 
 export interface AccessTokenResponse {
@@ -929,4 +930,190 @@ export async function getJobGaps(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as JobGapResponse;
+}
+
+// --------------------------------------------------------------------
+// Job eligibility (Prompt 5.1a)
+//
+// A SEPARATE DOMAIN FROM THE SKILL MATCH. Nothing below feeds into
+// skill_match_v1 or skill_gap_v1, and the two are never shown as one
+// number: "82% skill match" and "does not meet the CGPA bar" are
+// different kinds of claim, and collapsing them would destroy both.
+// --------------------------------------------------------------------
+
+/** What the candidate has declared about themselves. `null` means
+ * UNKNOWN — never zero, and never a default. Nothing here is inferred:
+ * every value was typed by the person it describes. */
+/** Where one fact came from, and whether the candidate has reviewed it.
+ * `excerpt` is a verbatim resume line — never generated prose. */
+export interface QualificationFactDetail {
+  status: "suggested" | "confirmed" | "rejected";
+  source_type: "resume" | "manual" | "github";
+  source_identifier: string | null;
+  excerpt: string | null;
+  extraction_method: string | null;
+  confidence: number | null;
+}
+
+export interface Qualifications {
+  cgpa: string | null;
+  /** Reported beside the value, always. A CGPA without its scale is not
+   * a weaker signal, it is an incomparable one. */
+  cgpa_scale: string | null;
+  class_10_percentage: string | null;
+  class_12_percentage: string | null;
+  highest_degree: string | null;
+  field_of_study: string | null;
+  graduation_year: number | null;
+  years_experience: string | null;
+  updated_at: string | null;
+  /** Per-fact provenance, keyed by fact type. Absent for a fact we do
+   * not hold — which is how the UI tells "not found in your resume"
+   * apart from a value of zero. */
+  facts: Record<string, QualificationFactDetail>;
+}
+
+/** A partial update. An omitted key is left unchanged; an explicit
+ * `null` clears the fact back to unknown. */
+export type QualificationsUpdate = Partial<
+  Omit<Qualifications, "updated_at" | "facts"> & { cgpa_scale: string | null }
+>;
+
+/** The four states, never collapsed to two.
+ *
+ * `unknown` means the CANDIDATE has not told us something and can fix
+ * it. `undetermined` means the REQUIREMENT cannot be evaluated as
+ * written — an unstated CGPA scale, or "or a related field" — and
+ * nothing the candidate does resolves it. NEITHER is a failure. */
+export type EligibilityState =
+  "satisfied" | "not_satisfied" | "unknown" | "undetermined";
+
+/** Not a percentage, deliberately: a CGPA floor and a degree
+ * requirement are not commensurable, so weighting them against each
+ * other would invent a judgement nothing can justify. */
+export type EligibilityFlag = "eligible" | "not_eligible" | "unknown";
+
+export type EligibilityRequirementType =
+  | "cgpa"
+  | "class_10_percentage"
+  | "class_12_percentage"
+  | "highest_degree"
+  | "field_of_study"
+  | "graduation_year"
+  | "years_experience";
+
+export type EligibilityComparator = "gte" | "lte" | "eq" | "in" | "between";
+
+/** One bar, resolved against the caller's own declared facts. */
+export interface EligibilityEntry {
+  requirement_type: EligibilityRequirementType;
+  state: EligibilityState;
+  comparator: EligibilityComparator;
+  requirement_numeric: string | null;
+  requirement_max: string | null;
+  requirement_scale: string | null;
+  accepted_values: string[];
+  requirement_level: string;
+  candidate_numeric: string | null;
+  candidate_text: string | null;
+  candidate_scale: string | null;
+  /** A stable machine token, never a sentence — the API owns the fact
+   * and this layer owns the wording, so a copy change is not an API
+   * change. */
+  reason: string;
+  /** A verbatim slice of the saved job's description. */
+  excerpt: string;
+}
+
+export interface EligibilityTotals {
+  satisfied: number;
+  not_satisfied: number;
+  unknown: number;
+  undetermined: number;
+  total_requirements: number;
+  required_not_satisfied: number;
+}
+
+export interface JobEligibilityResponse {
+  formula_version: string;
+  flag: EligibilityFlag;
+  /** False when the posting states no bar we recognise. Distinct from
+   * "the candidate clears none of them" — both render as an empty list
+   * and they mean opposite things. */
+  has_requirements: boolean;
+  /** False when the candidate has asserted no qualifications yet.
+   * Separates "set up your profile" from "your profile has gaps" —
+   * both otherwise arrive as a wall of `unknown`, and only one of them
+   * is fixed by filling in a form. */
+  has_qualification_profile: boolean;
+  totals: EligibilityTotals;
+  requirements: EligibilityEntry[];
+}
+
+export async function getQualifications(
+  accessToken: string,
+): Promise<Qualifications> {
+  const response = await fetch(QUALIFICATIONS_BASE, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as Qualifications;
+}
+
+export async function updateQualifications(
+  accessToken: string,
+  updates: QualificationsUpdate,
+): Promise<Qualifications> {
+  const response = await fetch(QUALIFICATIONS_BASE, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(updates),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as Qualifications;
+}
+
+/** Recomputed server-side on every request from current rows. One edit
+ * to the candidate's own facts changes this answer for every saved job
+ * at once, which is exactly why no verdict is stored. */
+export async function getJobEligibility(
+  accessToken: string,
+  savedJobId: string,
+): Promise<JobEligibilityResponse> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}/eligibility`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as JobEligibilityResponse;
+}
+
+/** Record that an extracted fact is not the candidate's.
+ *
+ * A tombstone, not a delete: the fact reads as unknown afterwards, and
+ * the next resume extraction will not re-suggest it. */
+export async function rejectQualification(
+  accessToken: string,
+  factType: string,
+): Promise<Qualifications> {
+  const response = await fetch(`${QUALIFICATIONS_BASE}/${factType}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as Qualifications;
 }
