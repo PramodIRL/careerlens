@@ -28,6 +28,11 @@ import {
  * grounded explanation", which is the truthful message, and the match
  * above is unaffected.
  *
+ * EVIDENCE SITS BEHIND A DISCLOSURE, not under every sentence. The
+ * excerpts are the proof and all of them stay available — but proof
+ * belongs where a reader reaches for it, rather than interleaved
+ * through the first paragraph they read.
+ *
  * EVERY QUOTE IS A STORED ROW. `cited_evidence` excerpts are the
  * candidate's own saved text, hydrated server-side; the model chose
  * which rows to cite and wrote none of their words.
@@ -56,38 +61,49 @@ const REASON_LABEL: Record<string, string> = {
   provider_error: "the explanation service failed unexpectedly",
 };
 
-function ClaimList({
-  claims,
-  evidenceById,
-}: {
-  claims: ExplanationClaim[];
-  evidenceById: Map<string, CitedEvidence>;
-}) {
+function ClaimList({ claims }: { claims: ExplanationClaim[] }) {
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="flex flex-col gap-1">
       {claims.map((claim, index) => (
         <li key={index} className="text-xs text-black dark:text-zinc-50">
           {claim.text}
-          {claim.evidence_ids.length > 0 && (
-            <ul className="mt-1 flex flex-col gap-1">
-              {claim.evidence_ids.map((id) => {
-                const evidence = evidenceById.get(id);
-                if (!evidence) return null;
-                return (
-                  <li
-                    key={id}
-                    className="border-l-2 border-zinc-300 pl-2 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
-                  >
-                    <span className="font-medium">{evidence.source_type}</span>
-                    {evidence.excerpt ? `: “${evidence.excerpt}”` : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Every cited row, once, behind a disclosure.
+ *
+ * NOT INLINE UNDER EACH CLAIM, which is where it used to live. Excerpts
+ * are the proof, and proof belongs where a reader can reach for it —
+ * not interleaved through the first paragraph they read, and not
+ * repeated because two claims happened to cite the same row.
+ *
+ * EVERY QUOTE IS STILL A STORED ROW. Nothing is summarised or
+ * paraphrased here; the excerpts are exactly what the API returned.
+ */
+function SupportingEvidence({ evidence }: { evidence: CitedEvidence[] }) {
+  if (evidence.length === 0) return null;
+
+  return (
+    <details className="border-t border-zinc-200 pt-2 dark:border-zinc-800">
+      <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">
+        Supporting evidence ({evidence.length})
+      </summary>
+      <ul className="mt-2 flex flex-col gap-2">
+        {evidence.map((row) => (
+          <li
+            key={row.evidence_id}
+            className="border-l-2 border-zinc-300 pl-2 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+          >
+            <span className="font-medium">{row.source_type}</span>
+            {row.excerpt ? `: “${row.excerpt}”` : null}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -112,10 +128,6 @@ export default function JobExplanationPanel({
       setLoading(false);
     }
   }
-
-  const evidenceById = new Map(
-    (explanation?.cited_evidence ?? []).map((row) => [row.evidence_id, row]),
-  );
 
   return (
     <div className="flex flex-col gap-2">
@@ -173,10 +185,7 @@ export default function JobExplanationPanel({
               <h5 className="mb-1 text-xs font-medium text-black dark:text-zinc-50">
                 Strengths
               </h5>
-              <ClaimList
-                claims={explanation.strengths}
-                evidenceById={evidenceById}
-              />
+              <ClaimList claims={explanation.strengths} />
             </div>
           )}
           {explanation.gaps.length > 0 && (
@@ -184,10 +193,7 @@ export default function JobExplanationPanel({
               <h5 className="mb-1 text-xs font-medium text-black dark:text-zinc-50">
                 Gaps
               </h5>
-              <ClaimList
-                claims={explanation.gaps}
-                evidenceById={evidenceById}
-              />
+              <ClaimList claims={explanation.gaps} />
             </div>
           )}
           {explanation.next_steps.length > 0 && (
@@ -202,6 +208,7 @@ export default function JobExplanationPanel({
               </ul>
             </div>
           )}
+          <SupportingEvidence evidence={explanation.cited_evidence} />
         </div>
       )}
     </div>

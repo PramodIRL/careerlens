@@ -8,6 +8,7 @@ const SAVED_JOB_BASE = `${API_BASE}/api/v1/saved-jobs`;
 const JOB_IMPORT_BASE = `${API_BASE}/api/v1/job-imports`;
 const QUALIFICATIONS_BASE = `${API_BASE}/api/v1/qualifications`;
 const GITHUB_CONNECTION_BASE = `${API_BASE}/api/v1/github-connection`;
+const ROADMAP_BASE = `${API_BASE}/api/v1/roadmap`;
 
 export interface AccessTokenResponse {
   access_token: string;
@@ -659,6 +660,10 @@ export interface SavedJobResponse {
   source_url: string | null;
   /** The posting exactly as the user saved it. */
   description: string;
+  /** The candidate's own ordering key (Prompt 6.3). It ORDERS, it does
+   * not LABEL — the rank shown to the user is this job's 1-based index
+   * in the list response, so a gap left by a deleted job is invisible. */
+  position: number;
   created_at: string;
   updated_at: string;
 }
@@ -1229,4 +1234,154 @@ export async function rejectQualification(
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
   return (await response.json()) as Qualifications;
+}
+
+// --------------------------------------------------------------------
+// Learning roadmap (Prompt 6.3)
+//
+// ONE COMBINED, CANDIDATE-LEVEL PLAN — not one roadmap per job. An item
+// routinely cites several saved jobs at once, which is exactly why
+// recurrence is part of roadmap_priority_v1.
+//
+// THE DETERMINISTIC HALF AND THE WRITTEN HALF ARE SEPARABLE. `why`,
+// `state`, `score` and `affected_jobs` are computed server-side without
+// a model; `task`, `success_criteria`, `overview` and `focus` come from
+// one and are null when the narrative was rejected. A reader can follow
+// the whole plan without trusting a single generated word.
+// --------------------------------------------------------------------
+
+/** A new priority order: every job the caller owns, exactly once,
+ * highest priority first. A partial list is a 422 — see the endpoint. */
+export async function reorderSavedJobs(
+  accessToken: string,
+  jobIds: string[],
+): Promise<SavedJobResponse[]> {
+  const response = await fetch(`${SAVED_JOB_BASE}/order`, {
+    method: "PUT",
+    credentials: "include",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as SavedJobResponse[];
+}
+
+/** "missing_required" | "missing_preferred" | "weak_evidence" */
+export type RoadmapGapState =
+  "missing_required" | "missing_preferred" | "weak_evidence";
+
+export interface RoadmapAffectedJob {
+  saved_job_id: string;
+  title: string;
+  company: string;
+  /** The USER's ordering — the primary signal behind the item's score. */
+  priority_rank: number;
+  /** skill_match_v1, shown for context only. Deliberately NOT part of
+   * roadmap_priority_v1: see apps/api/app/roadmap/priority.py. */
+  match_score: number | null;
+}
+
+export interface RoadmapEvidence {
+  evidence_id: string;
+  source_type: string;
+  source_identifier: string;
+  excerpt: string | null;
+}
+
+export interface RoadmapItem {
+  item_id: string;
+  skill_id: string;
+  /** WHAT TO LEARN — decided deterministically, never by a model. */
+  skill_name: string;
+  state: RoadmapGapState;
+  /** Real days in the declared window, 1-based inclusive. The spans
+   * across a plan sum to exactly duration_days. */
+  start_day: number;
+  end_day: number;
+  week: number;
+  score: number;
+  state_weight: number;
+  recurrence: number;
+  /** Deterministic plain language, generated without a model. */
+  why: string;
+  affected_jobs: RoadmapAffectedJob[];
+  evidence: RoadmapEvidence[];
+  /** AN ESTIMATE, derived from the hours the user declared. Must be
+   * presented as an estimate, never as a duration. */
+  estimated_hours: number;
+  /** Written by the provider; null when the narrative was rejected.
+   * WHAT TO DO / WHAT YOU END UP WITH / WHAT YOU CAN THEN DO.
+   * `outcome` is an artefact, `success_criteria` a capability. */
+  task: string | null;
+  outcome: string | null;
+  success_criteria: string | null;
+}
+
+export interface RoadmapWeek {
+  week: number;
+  /** "Week 2 · Days 8–14" — the week AND the days it covers. */
+  label: string;
+  start_day: number;
+  end_day: number;
+  focus: string | null;
+  /** An observable capability for the end of the week, phrased so the
+   * candidate can test themselves. Null when the narrative was
+   * rejected. */
+  checkpoint: string | null;
+  items: RoadmapItem[];
+}
+
+export interface RoadmapResponse {
+  formula_version: string;
+  /** Separate from formula_version: layout can change without implying
+   * the priorities moved. */
+  schedule_version: string;
+  narrative_schema_version: string;
+  /** "generated" | "rejected" */
+  narrative_status: string;
+  reason: string | null;
+  provider: string;
+  selected_job_count: number;
+  /** Total saved jobs — the ceiling on what may be selected. Returned
+   * so the "N of X" control re-bounds itself after an add or delete. */
+  saved_job_count: number;
+  /** False when nothing is saved. Say "you have not saved any jobs yet",
+   * never "no gaps found" — the first is about the input, the second is
+   * a claim about the person. */
+  has_selected_jobs: boolean;
+  duration_days: number;
+  hours_per_day: number;
+  total_hours: number;
+  overview: string | null;
+  weeks: RoadmapWeek[];
+}
+
+export interface RoadmapOptions {
+  topN: number;
+  durationDays: number;
+  hoursPerDay: number;
+}
+
+export async function getRoadmap(
+  accessToken: string,
+  { topN, durationDays, hoursPerDay }: RoadmapOptions,
+): Promise<RoadmapResponse> {
+  const query = new URLSearchParams({
+    top_n: String(topN),
+    duration_days: String(durationDays),
+    hours_per_day: String(hoursPerDay),
+  });
+  const response = await fetch(`${ROADMAP_BASE}?${query.toString()}`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as RoadmapResponse;
 }

@@ -1,0 +1,252 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import RoadmapSection from "./roadmap-section";
+import type { RoadmapResponse } from "@/lib/api-client";
+
+vi.mock("@/lib/api-client", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/api-client")>(
+      "@/lib/api-client",
+    );
+  return { ...actual, getRoadmap: vi.fn(), listSavedJobs: vi.fn() };
+});
+
+const { getRoadmap, listSavedJobs } = await import("@/lib/api-client");
+
+function roadmap(overrides: Partial<RoadmapResponse> = {}): RoadmapResponse {
+  return {
+    formula_version: "roadmap_priority_v1",
+    schedule_version: "roadmap_schedule_v1",
+    narrative_schema_version: "roadmap_narrative_v1",
+    narrative_status: "generated",
+    reason: null,
+    provider: "mock",
+    selected_job_count: 2,
+    saved_job_count: 4,
+    has_selected_jobs: true,
+    duration_days: 28,
+    hours_per_day: 1,
+    total_hours: 28,
+    overview: "A four-phase plan.",
+    weeks: [
+      {
+        week: 1,
+        label: "Week 1 · Days 1–7",
+        start_day: 1,
+        end_day: 7,
+        focus: "Working on AWS",
+        checkpoint:
+          "By the end of this week you should be able to explain what you built with AWS.",
+        items: [
+          {
+            item_id: "skill-1",
+            skill_id: "skill-1",
+            skill_name: "AWS",
+            state: "missing_required",
+            start_day: 1,
+            end_day: 4,
+            week: 1,
+            score: 109,
+            state_weight: 100,
+            recurrence: 9,
+            why: "AWS is missing and is required by 2 of your 2 selected jobs, including your #1 priority (Acme — Engineer).",
+            affected_jobs: [
+              {
+                saved_job_id: "job-1",
+                title: "Engineer",
+                company: "Acme",
+                priority_rank: 1,
+                match_score: 62,
+              },
+            ],
+            evidence: [],
+            estimated_hours: 4,
+            task: "Deploy a small service to AWS and document it.",
+            outcome: "A running service and a README.",
+            success_criteria: "Someone else can follow your write-up.",
+          },
+        ],
+      },
+      {
+        week: 2,
+        label: "Week 2 · Days 8–14",
+        start_day: 8,
+        end_day: 14,
+        focus: null,
+        checkpoint: null,
+        items: [],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describe("RoadmapSection", () => {
+  beforeEach(() => {
+    vi.mocked(getRoadmap).mockReset();
+    vi.mocked(listSavedJobs).mockReset();
+    vi.mocked(listSavedJobs).mockResolvedValue([]);
+  });
+
+  it("generates nothing until the user asks", () => {
+    render(<RoadmapSection accessToken="token" />);
+
+    expect(getRoadmap).not.toHaveBeenCalled();
+  });
+
+  it("shows the plan, the reason and the affected jobs", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+    // The mentoring answer comes first: what to do, what you get, who
+    // it helps, and when.
+    expect(
+      screen.getByText(/Deploy a small service to AWS/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/A running service and a README/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Helps Acme \(#1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Days 1–4/)).toBeInTheDocument();
+    // The gap kind stays visible: "missing" and "not reviewed" call for
+    // different work, which is advice rather than metadata.
+    expect(screen.getByText(/Missing — required/)).toBeInTheDocument();
+  });
+
+  it("labels effort as an estimate rather than a duration", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(
+      await screen.findByText(/about 4 hours \(estimated\)/),
+    ).toBeInTheDocument();
+  });
+
+  it("puts the reasoning and the job list behind disclosures", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    // Present and reachable, but not part of the primary prose.
+    expect(await screen.findByText("Why this?")).toBeInTheDocument();
+    expect(
+      screen.getByText("What you should be able to do"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Jobs this helps (1)")).toBeInTheDocument();
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
+  });
+
+  it("shows the end-of-week checkpoint", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(
+      await screen.findByText(/By the end of this week you should be able to/),
+    ).toBeInTheDocument();
+  });
+
+  it("bounds the job count by what the user has actually saved", async () => {
+    vi.mocked(listSavedJobs).mockResolvedValue([
+      { id: "a" },
+      { id: "b" },
+    ] as never);
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    const input = await screen.findByLabelText(/jobs to prepare for/i);
+    // The default of 5 clamps down to the two jobs that exist.
+    await waitFor(() => expect(input).toHaveValue(2));
+    expect(input).toHaveAttribute("max", "2");
+    expect(screen.getByText(/of 2 saved jobs/)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "9" } });
+    expect(input).toHaveValue(2);
+  });
+
+  it("caps hours per day at sixteen", async () => {
+    render(<RoadmapSection accessToken="token" />);
+
+    expect(screen.getByLabelText(/hours per day/i)).toHaveAttribute(
+      "max",
+      "16",
+    );
+  });
+
+  it("keeps the priorities when the narrative was rejected", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(
+      roadmap({
+        narrative_status: "rejected",
+        reason: "provider_timeout",
+        overview: null,
+        weeks: roadmap().weeks.map((week) => ({
+          ...week,
+          focus: null,
+          checkpoint: null,
+          items: week.items.map((item) => ({
+            ...item,
+            task: null,
+            outcome: null,
+            success_criteria: null,
+          })),
+        })),
+      }),
+    );
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    // The wording is gone and says why...
+    expect(
+      await screen.findByText(/did not answer in time/),
+    ).toBeInTheDocument();
+    // ...and every deterministic priority is still on the page.
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+    expect(
+      screen.getByText(/required by 2 of your 2 selected jobs/),
+    ).toBeInTheDocument();
+  });
+
+  it("says the input is empty rather than claiming no gaps", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(
+      roadmap({
+        has_selected_jobs: false,
+        selected_job_count: 0,
+        weeks: [],
+      }),
+    );
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(
+      await screen.findByText(/have not saved any jobs yet/),
+    ).toBeInTheDocument();
+  });
+
+  it("passes the chosen top-n and time to the API", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.change(screen.getByLabelText(/jobs to prepare for/i), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    await waitFor(() =>
+      expect(getRoadmap).toHaveBeenCalledWith("token", {
+        topN: 3,
+        durationDays: 28,
+        hoursPerDay: 1,
+      }),
+    );
+  });
+});

@@ -15,6 +15,7 @@ import {
   deleteSavedJob,
   importJobFromPdf,
   listSavedJobs,
+  reorderSavedJobs,
   updateSavedJob,
   type EmploymentType,
   type JobDraftResponse,
@@ -269,6 +270,36 @@ export default function JobsSection({
     }
   }
 
+  /** Move one job up or down the user's own priority ladder.
+   *
+   * Sends the WHOLE list, because the endpoint takes a full
+   * permutation: a partial reorder is ambiguous about where the omitted
+   * jobs go. The optimistic swap is reverted if the request fails, so
+   * the visible order never disagrees with the stored one.
+   */
+  async function handleMove(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= jobs.length) return;
+
+    const previous = jobs;
+    const next = [...jobs];
+    [next[index], next[target]] = [next[target], next[index]];
+    setJobs(next);
+    setError(null);
+
+    try {
+      setJobs(
+        await reorderSavedJobs(
+          accessToken,
+          next.map((job) => job.id),
+        ),
+      );
+    } catch (err) {
+      setJobs(previous);
+      setError(err instanceof ApiError ? err.message : "something went wrong");
+    }
+  }
+
   async function handleDelete(id: string) {
     if (busyId) return;
 
@@ -419,7 +450,7 @@ export default function JobsSection({
         </p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {jobs.map((job) => (
+          {jobs.map((job, index) => (
             <li
               key={job.id}
               className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700"
@@ -457,6 +488,12 @@ export default function JobsSection({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-black dark:text-zinc-50">
+                      {/* The rank is this job's INDEX in the list, not a
+                          stored number — which is why deleting a job
+                          never leaves a hole in the numbering. */}
+                      <span className="mr-1 text-zinc-500 dark:text-zinc-500">
+                        #{index + 1}
+                      </span>
                       {job.title}
                     </p>
                     <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
@@ -468,6 +505,30 @@ export default function JobsSection({
                     <p className="text-xs text-zinc-500 dark:text-zinc-500">
                       Saved {formatDate(job.created_at)}
                     </p>
+                    {/* The user's own priority order, which is what the
+                        roadmap reads — NOT the match score. Two buttons
+                        rather than drag-and-drop: this has to work from
+                        a keyboard, and a swap is unambiguous. */}
+                    <div className="mt-1 flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleMove(index, -1)}
+                        disabled={index === 0}
+                        aria-label={`Move ${job.title} up in priority`}
+                        className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-black disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-50"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMove(index, 1)}
+                        disabled={index === jobs.length - 1}
+                        aria-label={`Move ${job.title} down in priority`}
+                        className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-black disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-50"
+                      >
+                        ↓
+                      </button>
+                    </div>
                     {job.source_url && (
                       // rel="noreferrer" so the posting never learns
                       // where the click came from.

@@ -12,6 +12,7 @@ from app.api.v1.job_import import router as job_import_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.qualification import router as qualification_router
 from app.api.v1.resume import router as resume_router
+from app.api.v1.roadmap import router as roadmap_router
 from app.api.v1.saved_job import router as saved_job_router
 from app.api.v1.skill_profile import router as skill_profile_router
 
@@ -74,3 +75,9 @@ app.include_router(github_connection_router, prefix="/api/v1/github-connection")
 # Prompt 3.2 — mounted under the same prefix: an import belongs to a
 # connection, and there is no ingestion without one.
 app.include_router(github_ingestion_router, prefix="/api/v1/github-connection")
+# Prompt 6.3 — ONE combined, candidate-level learning roadmap. Its own
+# prefix rather than an extension of /saved-jobs: a roadmap references
+# many jobs at once, the same reasoning that gave /skill-profile its own
+# prefix instead of extending /candidate-skills. Read-only and not
+# persisted; nothing here writes a row.
+app.include_router(roadmap_router, prefix="/api/v1/roadmap")

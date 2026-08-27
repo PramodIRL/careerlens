@@ -33,7 +33,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.auth import get_current_user
@@ -95,6 +95,7 @@ from app.schemas.saved_job import (
     RequirementExtractionMethod,
     RequirementLevelSchema,
     SavedJobCreateRequest,
+    SavedJobOrderRequest,
     SavedJobResponse,
     SavedJobUpdateRequest,
     SemanticEvidenceResponse,
@@ -133,9 +134,20 @@ async def create_saved_job(
     db: AsyncSession = Depends(get_db),
 ) -> SavedJob:
     """Save a posting. The owner is taken from the access token, never
-    from the request."""
+    from the request.
+
+    A NEW JOB LANDS AT THE TOP, preserving the newest-first default the
+    list had before Prompt 6.3 while leaving it fully reorderable. One
+    below the current minimum rather than a shift of every other row:
+    `position` orders and does not label, so a negative value is as
+    valid as any other and costs no extra writes.
+    """
+    lowest = await db.scalar(
+        select(func.min(SavedJob.position)).where(SavedJob.user_id == current_user.id)
+    )
     saved_job = SavedJob(
         user_id=current_user.id,
+        position=0 if lowest is None else lowest - 1,
         company=body.company,
         title=body.title,
         description=body.description,
@@ -172,7 +184,12 @@ async def list_saved_jobs(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[SavedJob]:
-    """The caller's saved jobs, most recently saved first.
+    """The caller's saved jobs, in the order the CALLER chose.
+
+    Ordered by `position` (Prompt 6.3), which defaults to newest-first
+    for anyone who has never reordered. The 1-based index in this
+    response IS the priority rank the roadmap reads — nothing stores a
+    rank, so a gap left by a deleted job never needs repairing.
 
     An empty list rather than a 404 when nothing is saved: "I have not
     saved any jobs yet" is a normal state, and the UI should not need an
@@ -186,7 +203,12 @@ async def list_saved_jobs(
     rows = await db.scalars(
         select(SavedJob)
         .where(SavedJob.user_id == current_user.id)
-        .order_by(SavedJob.created_at.desc())
+        # THE USER'S OWN ORDER (Prompt 6.3), not newest-first. The
+        # migration seeded `position` from `created_at DESC`, so the
+        # first render after migrating is identical to the last one
+        # before it — the order only changes when the user changes it.
+        # `created_at` and `id` break ties left by a deleted job.
+        .order_by(SavedJob.position, SavedJob.created_at.desc(), SavedJob.id)
     )
     return list(rows.all())
 
@@ -258,6 +280,61 @@ async def delete_saved_job(
     saved_job = await _get_owned_job(db, saved_job_id, current_user)
     await db.delete(saved_job)
     await db.commit()
+
+
+@router.put("/order", response_model=list[SavedJobResponse])
+async def reorder_saved_jobs(
+    body: SavedJobOrderRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[SavedJob]:
+    """Set the caller's own priority order (Prompt 6.3).
+
+    THE PRIMARY JOB-IMPORTANCE SIGNAL IN THE PRODUCT. The roadmap reads
+    this order, not `skill_match_v1` — "how well do I match this" is a
+    different question from "which of these do I want", and answering
+    the second with the first would demote the job a candidate ranked
+    first because they happen to match it poorly.
+
+    A FULL PERMUTATION ONLY. Every job the caller owns must appear
+    exactly once. A partial list is a 422 rather than a best-effort
+    interpretation: "leave the rest where they are" would silently
+    reshuffle priorities the user did not touch.
+
+    ATOMIC, AND IT RELIES ON A DEFERRED CONSTRAINT. Rewriting a list
+    in place legitimately holds two rows at the same position partway
+    through, so `uq_saved_jobs_user_id_position` is DEFERRABLE INITIALLY
+    DEFERRED and the check happens at COMMIT. Without that, the
+    alternative is shuffling every row to negative positions first —
+    twice the writes to work around a check that belongs at the end.
+
+    OWNERSHIP IS STRUCTURAL: the jobs are loaded by `user_id` from the
+    token, and an id belonging to somebody else simply is not in that
+    set, so it fails the permutation check rather than reaching a row.
+    """
+    rows = (await db.scalars(select(SavedJob).where(SavedJob.user_id == current_user.id))).all()
+    owned = {job.id: job for job in rows}
+
+    if set(body.job_ids) != set(owned):
+        # One message for "you missed some", "you sent extras" and "one
+        # of those is not yours". Distinguishing them would confirm
+        # whether an id exists on somebody else's account.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="job_ids must list each of your saved jobs exactly once",
+        )
+
+    for index, job_id in enumerate(body.job_ids):
+        owned[job_id].position = index
+
+    await db.commit()
+
+    reordered = await db.scalars(
+        select(SavedJob)
+        .where(SavedJob.user_id == current_user.id)
+        .order_by(SavedJob.position, SavedJob.created_at.desc(), SavedJob.id)
+    )
+    return list(reordered.all())
 
 
 @router.get("/{saved_job_id}/requirements", response_model=list[JobSkillRequirementResponse])

@@ -131,7 +131,11 @@ def test_create_returns_201_and_the_stored_job(client: TestClient) -> None:
 
 def test_response_exposes_exactly_the_expected_fields(client: TestClient) -> None:
     """No user_id, no extracted skills, no match score — none of that
-    exists in Prompt 4.1, so none of it can leak from here."""
+    exists in Prompt 4.1, so none of it can leak from here.
+
+    `position` joined the response in Prompt 6.3: the candidate's own
+    ordering of their list, which is theirs to read and to set.
+    """
     token, _ = _new_user(client)
 
     body = _create(client, token).json()
@@ -144,6 +148,7 @@ def test_response_exposes_exactly_the_expected_fields(client: TestClient) -> Non
         "employment_type",
         "source_url",
         "description",
+        "position",
         "created_at",
         "updated_at",
     }

@@ -32,7 +32,10 @@ function explanation(overrides: Record<string, unknown> = {}) {
     semantic_formula_version: "semantic_fit_v1",
     summary: "Acme — Engineer: skill_match_v1 scored this match 75.",
     strengths: [
-      { text: "Your stored evidence covers Python.", evidence_ids: ["ev1"] },
+      {
+        text: "You already have evidence for Python and PostgreSQL.",
+        evidence_ids: ["ev1", "ev2"],
+      },
     ],
     gaps: [{ text: "Docker is preferred here.", evidence_ids: [] }],
     next_steps: ["Look at what Docker would involve."],
@@ -42,6 +45,12 @@ function explanation(overrides: Record<string, unknown> = {}) {
         source_type: "resume",
         source_identifier: "resume-1",
         excerpt: "Built backend services in Python",
+      },
+      {
+        evidence_id: "ev2",
+        source_type: "github",
+        source_identifier: "octocat/api",
+        excerpt: "Postgres-backed service",
       },
     ],
     ...overrides,
@@ -61,7 +70,7 @@ describe("JobExplanationPanel", () => {
     expect(getJobExplanationMock).not.toHaveBeenCalled();
   });
 
-  it("shows each claim beside the stored evidence it cites", async () => {
+  it("leads with readable prose, not a list of evidence rows", async () => {
     getJobExplanationMock.mockResolvedValue(explanation());
     render(
       <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
@@ -71,16 +80,33 @@ describe("JobExplanationPanel", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("Your stored evidence covers Python."),
+        screen.getByText(
+          "You already have evidence for Python and PostgreSQL.",
+        ),
       ).toBeInTheDocument(),
     );
-    // The quote is the candidate's own stored row, not model prose.
-    expect(
-      screen.getByText(/Built backend services in Python/),
-    ).toBeInTheDocument();
     expect(
       screen.getByText("Look at what Docker would involve."),
     ).toBeInTheDocument();
+  });
+
+  it("puts every cited row behind one supporting-evidence disclosure", async () => {
+    getJobExplanationMock.mockResolvedValue(explanation());
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Supporting evidence (2)")).toBeInTheDocument(),
+    );
+    // Still there and still the candidate's own stored rows — just not
+    // interleaved through the prose, and listed once each.
+    expect(
+      screen.getByText(/Built backend services in Python/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Postgres-backed service/)).toBeInTheDocument();
   });
 
   it("says why a rejected explanation is not shown, and shows none of it", async () => {

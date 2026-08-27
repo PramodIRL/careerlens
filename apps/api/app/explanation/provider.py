@@ -20,7 +20,12 @@ import json
 from typing import Protocol
 
 from app.explanation.prompt import ExplanationRequest
-from app.explanation.schema import SCHEMA_VERSION, ExplanationFacts, SkillFact
+from app.explanation.schema import (
+    MAX_CLAIM_CITATIONS,
+    SCHEMA_VERSION,
+    ExplanationFacts,
+    SkillFact,
+)
 from app.settings import Settings, get_settings
 
 MOCK_PROVIDER_NAME = "mock"
@@ -125,6 +130,14 @@ class MockExplanationProvider:
         return json.dumps(_render(facts), sort_keys=True)
 
 
+def _level_phrase(facts: list[SkillFact]) -> str:
+    """ "required skill" or "required skills", by count. Grammar, not a
+    judgement — a sentence that says "1 required skills" reads as
+    machine output, which is the whole thing this prose is fixing."""
+    required = [fact for fact in facts if fact.requirement_level == "required"]
+    return "required skill" if len(required) == 1 else "required skills"
+
+
 def _render(facts: ExplanationFacts) -> dict[str, object]:
     score = facts.score
     if score.has_requirements:
@@ -139,12 +152,32 @@ def _render(facts: ExplanationFacts) -> dict[str, object]:
             f"recognised in this posting, so {score.formula_version} has nothing to score."
         )
 
-    # Only skills with evidence become strengths — a strength has to
-    # cite, and the validator enforces it.
+    # ONE STRENGTH NAMING THE SKILLS TOGETHER, not one repetitive claim
+    # per skill. The earlier shape emitted "Your stored evidence covers
+    # X." once for every match, which read as a database dump rather
+    # than as somebody telling you where you stand — and the excerpts
+    # behind it belong in a disclosure the reader opens, not in the
+    # first paragraph they see.
+    #
+    # Only skills WITH evidence are named: a strength has to cite, and
+    # the validator enforces it. Citations are capped by
+    # MAX_CLAIM_CITATIONS, so a job with many matches names them all and
+    # cites the first few — every name is still in the facts, which is
+    # what `_check_skills` verifies.
     cited = [fact for fact in facts.matched_skills if fact.evidence_ids]
-    strengths = [_claim(f"Your stored evidence covers {_join([fact])}.", [fact]) for fact in cited][
-        :5
-    ]
+    strengths: list[dict[str, object]] = []
+    if cited:
+        strengths.append(
+            _claim(
+                f"You already have evidence for {_join(cited)}"
+                + (
+                    f", including the {_level_phrase(cited)} this posting asks for."
+                    if any(fact.requirement_level == "required" for fact in cited)
+                    else "."
+                ),
+                cited[:MAX_CLAIM_CITATIONS],
+            )
+        )
 
     gaps: list[dict[str, object]] = []
     if facts.missing_required_skills:
