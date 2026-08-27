@@ -15,6 +15,79 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Adopt `fastembed` running
+  `sentence-transformers/all-MiniLM-L6-v2` as the real local embedding
+  provider, rather than the official `sentence-transformers` package.
+- **Problem**: 5.2b needs real semantic embeddings at 384 dimensions,
+  locally, with no hosted API and no credential.
+- **Alternatives**: (1) `sentence-transformers` (PyTorch); (2)
+  `BAAI/bge-small-en-v1.5` as the model.
+- **Trade-off**: Measured in throwaway venvs — current 196 MB, fastembed
+  340 MB (+144), sentence-transformers 954 MB (+758, of which torch
+  alone is 490 MB). Both run the SAME model and produce the same 384-dim
+  output, so this is 5.3x the disk for no accuracy difference. On the
+  model choice, MiniLM beat BGE on a 7-sentence fixture: related-minus-
+  unrelated margin +0.0699 vs +0.0259, and MiniLM's floor is near zero
+  (unrelated 0.124 / -0.015) where BGE compresses everything into
+  0.50-0.77, leaving no interpretable threshold. BGE's prescribed query
+  prefix made it worse still — it INVERTED the ordering, ranking an
+  unrelated item above a related one.
+- **Outcome**: fastembed + all-MiniLM-L6-v2. 384 dimensions, so 5.1's
+  `vector(384)` needs no migration — the width chosen in 5.1 precisely
+  because this was the likely first real provider.
+
+- **Date**: 2026-08-27
+- **Decision**: `semantic_fit_v1` is reported on its own endpoint
+  (`GET /saved-jobs/{id}/semantic`) and is NEVER folded into
+  `overall_score`.
+- **Problem**: 5.2b adds a semantic signal, and the obvious move is to
+  blend it into the headline match percentage.
+- **Alternatives**: (1) add a field to the `/match` response; (2) blend
+  into `overall_score` as `0.8*v1 + fit`, or `min(100, v1 + fit)`.
+- **Trade-off**: A separate endpoint costs the client a second request.
+  In exchange `skill_match_v1` is unchanged *structurally* rather than
+  merely by test, and a cold, unconfigured or failing model cannot delay
+  or break the deterministic score. Blending was rejected outright:
+  `min(100, ...)` gives a strong candidate nothing, and `0.8*v1 + fit`
+  silently redefines the baseline every stored screenshot was taken
+  against.
+- **Outcome**: Separate endpoint, separate version string, separate UI
+  panel placed below both the score and eligibility.
+
+- **Date**: 2026-08-27
+- **Decision**: Treat `SIMILARITY_FLOOR = 0.20` and
+  `SIMILARITY_CEIL = 0.60` as PROVISIONAL and say so everywhere they
+  appear.
+- **Problem**: The fit formula needs a floor and a ceiling to normalise
+  against.
+- **Alternatives**: Ship without a threshold; or present the resulting
+  number as a calibrated score.
+- **Trade-off**: The constants come from a SEVEN-SENTENCE hand-written
+  fixture — enough to make the shape of the formula testable, nowhere
+  near enough to claim the values are right. FLOOR sits in the measured
+  gap between highest-unrelated (0.124) and lowest-related (0.194),
+  which is a gap of 0.07 on n=7. Shipping them unlabelled would let a
+  reader treat `fit` as a hiring signal it has no basis to be.
+- **Outcome**: Constants documented as provisional in the module, the
+  API schema and the UI copy; `semantic_fit_v1` is never presented as a
+  calibrated hiring or ranking score; validation deferred to 5.3.
+
+- **Date**: 2026-08-27
+- **Decision**: Real-provider tests skip when the model cannot be
+  loaded; no Hugging Face cache or network step is added to CI.
+- **Problem**: The first real embedding downloads ~90 MB, which a cold
+  CI runner has no cache for.
+- **Alternatives**: Add an HF cache + warm step to `api-ci.yml`.
+- **Trade-off**: The related-outranks-unrelated assertion does not run
+  in CI, so that specific guarantee is verified locally only. Everything
+  else — the formula, ownership, model isolation, the
+  baseline-unchanged guarantees — uses the deterministic mock and runs
+  everywhere. Accepted to keep CI free of a network dependency and ~30s
+  slower for one assertion.
+- **Outcome**: `_real_provider()` calls `pytest.skip` on load failure.
+  Revisit if the semantic path grows enough to need CI coverage.
+
+- **Date**: 2026-08-27
 - **Decision**: Ship Prompt 5.2 as retrieval infrastructure only (5.2a).
   No `semantic_fit_v1` score component, no UI, and no change to
   `overall_score`.

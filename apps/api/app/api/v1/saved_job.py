@@ -45,6 +45,8 @@ from app.eligibility.extract import (
 )
 from app.eligibility.resolve import RequirementInput as EligibilityRequirementInput
 from app.eligibility.resolve import resolve_eligibility
+from app.embeddings.provider import get_embedding_provider
+from app.embeddings.semantic_fit import compute_semantic_fit
 from app.job_requirements.extract import extract_job_requirements, list_job_requirements
 from app.matching.resolve import (
     ResolutionState,
@@ -73,6 +75,7 @@ from app.schemas.saved_job import (
     GapTotalsResponse,
     JobGapResponse,
     JobMatchResponse,
+    JobSemanticResponse,
     JobSkillRequirementResponse,
     LevelBreakdownResponse,
     MatchedEvidenceResponse,
@@ -83,6 +86,7 @@ from app.schemas.saved_job import (
     SavedJobCreateRequest,
     SavedJobResponse,
     SavedJobUpdateRequest,
+    SemanticEvidenceResponse,
 )
 
 router = APIRouter()
@@ -785,5 +789,65 @@ async def read_saved_job_eligibility(
                 excerpt=excerpt_by_type.get(resolution.requirement.requirement_type.value, ""),
             )
             for resolution in result.resolutions
+        ],
+    )
+
+
+@router.get("/{saved_job_id}/semantic", response_model=JobSemanticResponse)
+async def read_saved_job_semantic(
+    saved_job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JobSemanticResponse:
+    """Candidate evidence that sits near this job's wording.
+
+    SUPPORTING EVIDENCE, NOT A SKILL CLAIM. This endpoint answers "what
+    of the candidate's stored evidence looks relevant to this posting?"
+    It does not answer "does the candidate have skill X" — that is
+    `/match`, and nothing here changes it. `overall_score`,
+    `skill_match_v1` and `skill_gap_v1` are untouched by this route, and
+    no response from it can make a required skill count as satisfied.
+
+    ITS OWN ENDPOINT so a cold or unconfigured model can never slow down
+    or break the deterministic score. A client that never calls this
+    sees exactly the product Phase 4 shipped.
+
+    EMBEDS NOTHING IN THE REQUEST PATH. Both the job and the evidence
+    were embedded ahead of time by `make embeddings-backfill`; this
+    reads stored vectors. A job with no embeddings yet returns an empty
+    result rather than an error — "nothing to compare" is a truthful
+    answer, and inventing one would not be.
+
+    OWNERSHIP is the same `_get_owned_job` the rest of this module uses,
+    and retrieval filters on `user_id` independently, so evidence can
+    never cross users.
+    """
+    saved_job = await _get_owned_job(db, saved_job_id, current_user)
+
+    result = await compute_semantic_fit(
+        db,
+        user_id=current_user.id,
+        saved_job_id=saved_job.id,
+        model_identifier=get_embedding_provider().model_identifier,
+    )
+
+    return JobSemanticResponse(
+        formula_version=result.formula_version,
+        fit=result.fit,
+        band=result.band,
+        model_identifier=result.model_identifier,
+        considered=result.considered,
+        evidence=[
+            SemanticEvidenceResponse(
+                embedding_id=hit.hit.embedding_id,
+                source_type=hit.hit.source_type,
+                source_id=hit.hit.source_id,
+                evidence_id=hit.evidence_id,
+                excerpt=hit.excerpt,
+                evidence_source_type=hit.evidence_source_type,
+                evidence_source_identifier=hit.evidence_source_identifier,
+                similarity=hit.hit.similarity,
+            )
+            for hit in result.hits
         ],
     )

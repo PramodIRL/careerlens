@@ -27,6 +27,21 @@ dependencies = [
     # file as a test dependency (Starlette's TestClient uses it), so
     # this promotion adds no new transitive packages.
     "httpx>=0.27",
+    # Local sentence embeddings (Prompt 5.2b). Runs
+    # sentence-transformers/all-MiniLM-L6-v2 — the 384-dimension model the
+    # `vector(384)` column was sized for in 5.1 — through onnxruntime.
+    #
+    # CHOSEN OVER `sentence-transformers` PURELY ON WEIGHT. Both run the
+    # same model and produce the same 384-dim output; the official package
+    # pulls PyTorch, measured at 490 MB on its own and 758 MB installed,
+    # against 144 MB for this. There is no accuracy difference to trade
+    # off — only a 5.3x difference in what has to be downloaded, cached
+    # and shipped.
+    #
+    # NO CREDENTIAL AND NO HOSTED API. Inference is local; the only
+    # network access is a one-time ~90 MB model-weight download from
+    # Hugging Face on first use, cached on disk thereafter.
+    "fastembed>=0.8",
 ]
 
 [dependency-groups]

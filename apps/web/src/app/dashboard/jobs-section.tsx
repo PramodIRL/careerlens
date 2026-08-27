@@ -25,6 +25,7 @@ import {
 import JobEligibilityPanel from "./job-eligibility-panel";
 import JobGapPanel from "./job-gap-panel";
 import JobMatchPanel from "./job-match-panel";
+import JobSemanticPanel from "./job-semantic-panel";
 
 interface JobsSectionProps {
   accessToken: string;
@@ -556,6 +557,19 @@ export default function JobsSection({
                         Eligibility
                       </h4>
                       <JobEligibilityPanel
+                        accessToken={accessToken}
+                        savedJobId={job.id}
+                        refreshKey={refreshKey}
+                      />
+                    </div>
+                    {/* Supporting evidence, placed LAST and below both
+                        the score and eligibility: it is the weakest
+                        claim on the page and must not read as part of
+                        either. Its own panel carries the wording that
+                        keeps it from being mistaken for skill
+                        ownership. */}
+                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                      <JobSemanticPanel
                         accessToken={accessToken}
                         savedJobId={job.id}
                         refreshKey={refreshKey}

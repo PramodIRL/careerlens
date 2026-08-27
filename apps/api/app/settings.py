@@ -159,6 +159,11 @@ class Settings(BaseSettings):
     # so changing it means "re-embed under a new model" rather than
     # "relabel the existing rows". Named to be unmistakably a fake.
     embedding_model_identifier: str = "mock-deterministic-v1"
+    # The real model used when `embedding_provider` is "local" (Prompt
+    # 5.2b). Runs in-process via onnxruntime — there is no hosted API and
+    # no credential. 384 dimensions, matching the column; a model of a
+    # different width would need a migration, not a config change.
+    embedding_local_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     @property
     def database_url(self) -> str:

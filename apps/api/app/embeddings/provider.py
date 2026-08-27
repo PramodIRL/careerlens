@@ -13,13 +13,22 @@ both would block the event loop of an app that is async end to end. A
 synchronous signature here would have to be broken later, changing every
 caller; an async one absorbs the real implementation unchanged.
 
-THERE IS NO REAL PROVIDER IN THIS SLICE and no credential for one. No
-API key is read, requested or named anywhere in this module.
+TWO IMPLEMENTATIONS, ONE PROTOCOL. `MockEmbeddingProvider` is
+deterministic-by-construction and carries no meaning — it exists so unit
+tests can assert exact vectors without a model. `LocalSentenceEmbedding
+Provider` (Prompt 5.2b) runs a real 384-dimension sentence model
+locally. Neither reads a credential: there is no hosted API and no API
+key named anywhere in this module.
 """
 
+import asyncio
 import hashlib
 import struct
-from typing import Protocol
+from functools import lru_cache
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:  # pragma: no cover - import cost is paid lazily at runtime
+    from fastembed import TextEmbedding
 
 from app.embeddings.hashing import normalize_text
 
@@ -36,6 +45,18 @@ from app.settings import Settings, get_settings
 MOCK_MODEL_IDENTIFIER = "mock-deterministic-v1"
 
 MOCK_PROVIDER_NAME = "mock"
+
+LOCAL_PROVIDER_NAME = "local"
+
+# The real model. 384 dimensions — the width `vector(384)` was sized for
+# in Prompt 5.1, chosen then precisely because this was the most likely
+# first real provider, so adopting it needs no migration.
+LOCAL_MODEL_IDENTIFIER = "sentence-transformers/all-MiniLM-L6-v2"
+
+# The model's fixed output width. Not configurable: it is a property of
+# the weights, and it must equal app/models/embedding.py's
+# EMBEDDING_DIMENSION or the store refuses to write.
+_LOCAL_DIMENSION = 384
 
 # One SHA-256 block is 32 bytes = 8 uint32 = 8 vector components.
 _COMPONENTS_PER_BLOCK = 8
@@ -138,6 +159,72 @@ class MockEmbeddingProvider:
         return [to_float32(component * scale) for component in components]
 
 
+@lru_cache(maxsize=2)
+def _load_model(model_name: str) -> "TextEmbedding":
+    """The loaded ONNX model, once per process per model name.
+
+    Cached because loading is the expensive part: measured at ~25s the
+    first time (it downloads ~90 MB of weights) and ~0.17s from the
+    on-disk cache afterwards, against ~3ms to embed one text. Loading per
+    request would make every request pay that, so the instance is held
+    here for the life of the process.
+
+    Imported inside the function, not at module scope: `fastembed` pulls
+    in onnxruntime and numpy, and nothing that only uses the mock — the
+    whole unit-test suite included — should pay that import cost.
+    """
+    from fastembed import TextEmbedding
+
+    return TextEmbedding(model_name=model_name)
+
+
+class LocalSentenceEmbeddingProvider:
+    """A real sentence-embedding model, running locally.
+
+    NO HOSTED API AND NO CREDENTIAL. Inference happens in this process
+    via onnxruntime. The only network access is a one-time model-weight
+    download on first use, cached on disk by `fastembed` thereafter.
+
+    Output is L2-normalised and rounded to float32 for exactly the
+    reasons app/embeddings/vector_type.py documents: `vector` stores
+    `real`, so a float64 would not survive the round trip unchanged, and
+    unit-length vectors make cosine distance and dot product agree.
+
+    Deterministic in practice: onnxruntime inference over the same input
+    on the same build produced bit-identical output when measured. That
+    is a property of the runtime rather than a guarantee this class can
+    make, so tests assert repeatability WITHIN a process and do not
+    hard-code expected vectors.
+    """
+
+    def __init__(self, *, model_identifier: str = LOCAL_MODEL_IDENTIFIER) -> None:
+        self._model_identifier = model_identifier
+
+    @property
+    def model_identifier(self) -> str:
+        return self._model_identifier
+
+    @property
+    def dimension(self) -> int:
+        return _LOCAL_DIMENSION
+
+    async def embed_text(self, text: str) -> list[float]:
+        """Embed off the event loop.
+
+        The work is CPU-bound and synchronous, and the first call also
+        pays the model load, so running it inline would stall every other
+        request in an app that is async end to end.
+        """
+        return await asyncio.to_thread(self.embed_text_sync, text)
+
+    def embed_text_sync(self, text: str) -> list[float]:
+        model = _load_model(self._model_identifier)
+        vector = [float(component) for component in next(iter(model.embed([text])))]
+        norm = sum(component * component for component in vector) ** 0.5
+        scale = 1.0 / norm if norm else 1.0
+        return [to_float32(component * scale) for component in vector]
+
+
 def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvider:
     """Build the configured provider.
 
@@ -152,7 +239,9 @@ def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvide
             dimension=settings.embedding_dimension,
             model_identifier=settings.embedding_model_identifier,
         )
+    if settings.embedding_provider == LOCAL_PROVIDER_NAME:
+        return LocalSentenceEmbeddingProvider(model_identifier=settings.embedding_local_model)
     raise ValueError(
         f"unknown embedding provider {settings.embedding_provider!r} "
-        f"(known providers: {MOCK_PROVIDER_NAME})"
+        f"(known providers: {MOCK_PROVIDER_NAME}, {LOCAL_PROVIDER_NAME})"
     )
