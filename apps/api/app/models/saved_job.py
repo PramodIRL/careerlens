@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -52,6 +52,16 @@ class SavedJob(Base):
     """
 
     __tablename__ = "saved_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "position",
+            name="uq_saved_jobs_user_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        Index("ix_saved_jobs_user_id_position", "user_id", "position"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -69,6 +79,19 @@ class SavedJob(Base):
     # agree on for a URL; anything longer is not a link a user pasted.
     source_url: Mapped[str | None] = mapped_column(String(2048), default=None)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    # The candidate's OWN ordering of their list (Prompt 6.3), and the
+    # primary job-importance signal `roadmap_priority_v1` reads.
+    # Deliberately not derived from `skill_match_v1`: "how well do I
+    # match this" is a different question from "which of these do I
+    # want", and letting the first answer the second would demote a job
+    # the user ranked first because they happen to match it poorly.
+    #
+    # IT ORDERS, IT DOES NOT LABEL. The rank a user sees is the 1-based
+    # index in the sorted response, so a gap left by a deleted job is
+    # invisible and no renumbering pass is ever needed. Unique per user
+    # and DEFERRABLE — a reorder rewrites a whole list in one
+    # transaction and legitimately holds duplicates until COMMIT.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

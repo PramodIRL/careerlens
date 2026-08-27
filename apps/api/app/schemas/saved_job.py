@@ -240,8 +240,41 @@ class SavedJobResponse(BaseModel):
     source_url: str | None
     # The posting exactly as the user saved it.
     description: str
+    # The candidate's own ordering key (Prompt 6.3). It ORDERS, it does
+    # not LABEL: the rank a user sees is this job's 1-based index in the
+    # list response, so a gap left by a deleted job is invisible.
+    position: int
     created_at: datetime
     updated_at: datetime
+
+
+class SavedJobOrderRequest(BaseModel):
+    """A new ordering for the caller's saved jobs (Prompt 6.3).
+
+    A FULL PERMUTATION, NOT A PARTIAL LIST. The request must name every
+    job the caller owns, exactly once. A partial list is rejected rather
+    than interpreted: it is genuinely ambiguous about where the omitted
+    jobs go, and the friendly reading — "leave them where they are" —
+    silently drops somebody's job to the bottom of their own priorities.
+
+    `user_id` is absent and `extra="forbid"` turns an attempt to supply
+    one into a 422, the same structural ownership every other request
+    model here has.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Highest priority first. Index 0 becomes the user's #1.
+    job_ids: list[UUID]
+
+    @field_validator("job_ids")
+    @classmethod
+    def _check_job_ids(cls, v: list[UUID]) -> list[UUID]:
+        if not v:
+            raise ValueError("job_ids must not be empty")
+        if len(set(v)) != len(v):
+            raise ValueError("job_ids must not contain duplicates")
+        return v
 
 
 class JobDraftResponse(BaseModel):

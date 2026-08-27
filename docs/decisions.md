@@ -15,6 +15,121 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Schedule the roadmap by distributing DAYS
+  (`roadmap_schedule_v1`), derive the week count from the declared
+  duration, and bound `top_n` by the user's actual saved-job count.
+- **Problem**: Browser testing found three things the first cut got
+  wrong. Four fixed phases with day-range LABELS told a candidate with
+  fourteen days they had four weeks. Distributing HOURS could round each
+  item up past the declared window at low hours-per-day. And the
+  fixed Top-3/5/7/10 options had no relationship to how many jobs the
+  user had actually saved.
+- **Alternatives**: (1) keep four phases and label them harder;
+  (2) distribute hours and clamp the overflow; (3) a static `le=` bound
+  on `top_n`.
+- **Trade-off**: Distributing days is what makes the window EXACT rather
+  than approximately right: `divmod(duration_days, n)` sums to
+  `duration_days` by construction, so there is no overflow and no
+  unclaimed tail, and `estimated_hours` follows from the span instead of
+  being computed separately and hoped to agree. The cost is that an item
+  needs at least one day, so the item count is additionally bounded by
+  the duration — without that a twelve-item budget over seven days
+  divides to a span of zero. The remainder goes to the highest-ranked
+  items; somebody has to get the extra day.
+- **On the dynamic bound**: `top_n`'s ceiling is a per-request fact and
+  cannot be a static Query bound, so the floor is declared and the
+  ceiling checked in the handler. Two cases matter and both were found
+  by testing rather than by reading: a user with ZERO saved jobs must
+  not get a 422 (any `top_n` exceeds zero, but "you have not saved any
+  jobs yet" is an empty state, not a client mistake), and an OMITTED
+  `top_n` resolves against the real count instead of erroring — a
+  default of 5 that the user never typed must not be able to be invalid
+  for somebody with one saved job.
+- **On presentation**: the item card now answers what to do, what you
+  end up with, and who it helps, in that order; `why`, the full job
+  list, the capability check and the score terms moved behind native
+  `<details>`. `outcome` (an artefact) is a new narrative field distinct
+  from `success_criteria` (a capability) — "a running service and a
+  README" versus "you can explain why you chose it". A plan with only
+  the second is a reading list. Weekly `checkpoint` is phrased as an
+  observable capability because "did you finish it" and "can you now do
+  it" are different questions.
+- **On the explanation**: the mock emitted "Your stored evidence covers
+  X" once per matched skill, which read as a database dump. It now
+  writes one strength naming them together, and the excerpts moved to a
+  single "Supporting evidence (N)" disclosure, deduplicated. Every
+  excerpt is still a stored row and all of them remain available — proof
+  belongs where a reader reaches for it, not interleaved through the
+  first paragraph they read. No validator rule changed.
+- **Outcome**: `roadmap_priority_v1` is byte-for-byte unchanged and a
+  test asserts scheduling does not re-rank. Weeks are now derived: 28
+  days is still four, 14 is two, 56 is eight — a departure from the
+  brief's literal "four-week roadmap" that keeps its canonical case
+  exact.
+
+- **Date**: 2026-08-27
+- **Decision**: Rank the learning roadmap on the USER's saved-job order
+  plus gap kind (`roadmap_priority_v1`), and keep `skill_match_v1` out
+  of the arithmetic entirely.
+- **Problem**: "Which jobs matter most" has an obvious wrong answer —
+  the highest match score. That inverts the candidate's stated intent:
+  a job they ranked FIRST gets demoted precisely because they match it
+  poorly, which is also the situation with the most to learn.
+- **Alternatives**: (1) rank by `skill_match_v1`; (2) blend it with user
+  order; (3) use it as a final tie-break.
+- **Trade-off**: All three were rejected on the same ground — the
+  direction is not merely debatable, it is genuinely ambiguous. A low
+  match means more preparation is needed, so any weight picks a side the
+  data does not support. The score is instead DISPLAYED per affected job
+  ("#1 Acme — Engineer, 62% skill match"), where a person can weigh it
+  themselves. As a tie-break it would fire rarely and be hard to explain
+  when it did.
+- **The load-bearing constant**: recurrence is capped at 24, one less
+  than the narrowest gap between two state weights (50 - 25). That is
+  what makes the bands non-overlapping: required 100-124, preferred
+  50-74, weak 25-49. Uncapped, a merely-preferred skill wanted by fifty
+  saved jobs reaches 5+4+3+2+46 = 60 and overtakes a required one — a
+  failure that appears only at scale, long after small fixtures pass. A
+  test asserts `MAX_RECURRENCE < min(band gaps)` directly, and three
+  parameterised cases stress it at 5, 10 and 50 jobs.
+- **On weak evidence**: defined as `skill_gap_v1`'s own
+  `needs_confirmation` bucket, so the roadmap's idea of "weak" cannot
+  drift from what the gap panel shows. Deliberately NOT `confidence`,
+  which is match quality rather than capability — ranking a study plan
+  by it would make exactly the claim `score.py` and `schemas/skill.py`
+  both document against. Rejected requirements never become items: the
+  user disowned that skill.
+- **On position**: it ORDERS, it does not LABEL. The rank a user sees is
+  the 1-based index in the sorted response, so a deletion leaves a gap
+  nobody has to repair. Unique per user and DEFERRABLE INITIALLY
+  DEFERRED — a reorder rewrites a list in one transaction and
+  legitimately holds duplicates until COMMIT; the usual workaround
+  (shuffle everything negative first) doubles the writes to dodge a
+  check that belongs at the end.
+- **On persistence**: only `position` is stored. Top-N and time are
+  query parameters, because the line worth holding is "priority is data
+  about the user's jobs; top-N and hours are arguments to one request".
+  The roadmap itself is derived on read for a sharper reason than the
+  usual cache-invalidation one: a stored plan asserting "AWS is required
+  by 3 of your top 5 jobs" in a SENTENCE becomes a false claim about the
+  user's own data the moment two of those jobs are deleted, and unlike a
+  stale number a stale paragraph still reads like a fact.
+- **On the LLM boundary**: the narrative is a MAP keyed by deterministic
+  `item_id`, not a list. Adding a skill, dropping one or reordering the
+  plan are not violations to catch — the response shape has nowhere to
+  express them. 6.2's timeout/retry/logging moved to
+  `app/explanation/runtime.py` and is called by both adapters unchanged,
+  rather than copied.
+- **Stated rather than hidden**: `HOURS_PER_ITEM` and every
+  `estimated_hours` are planning assumptions. CareerLens has no idea how
+  long it takes anyone to learn AWS, and the schema, the API docstring
+  and the UI all say "estimated" rather than implying a measurement.
+- **Outcome**: one migration (`saved_jobs.position`), one additive
+  response field, and one behaviour change — `GET /saved-jobs` now
+  orders by the user's order rather than newest-first, seeded so the
+  first render after migrating is identical to the last one before it.
+
+- **Date**: 2026-08-27
 - **Decision**: Retry the LLM explanation's TRANSPORT and never its
   CONTENT: one retry on timeout/unavailable, none on any validation
   failure, with a 10s per-attempt budget applied by the adapter.

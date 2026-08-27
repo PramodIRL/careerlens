@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 
 import GitHubSection from "./github-section";
 import JobsSection from "./jobs-section";
+import RoadmapSection from "./roadmap-section";
 import ProfileForm from "./profile-form";
 import QualificationsSection from "./qualifications-section";
 import ResumeSection from "./resume-section";
@@ -171,6 +172,17 @@ export default function DashboardPage() {
             refetch when a skill is confirmed, rejected or added — the
             same signals the skill sections already listen to. */}
         <JobsSection
+          accessToken={accessToken}
+          refreshKey={externalVersion + profileVersion + qualificationVersion}
+        />
+      </div>
+
+      {/* BELOW the jobs, because a roadmap is derived from them: the
+          user sets their priorities above, and reads the consequence
+          here. Generated only on an explicit click — see
+          RoadmapSection. */}
+      <div className="w-full max-w-sm">
+        <RoadmapSection
           accessToken={accessToken}
           refreshKey={externalVersion + profileVersion + qualificationVersion}
         />
