@@ -933,6 +933,55 @@ export async function getJobGaps(
 }
 
 // --------------------------------------------------------------------
+// Semantic relevance (Prompt 5.2b)
+//
+// SUPPORTING EVIDENCE, NOT A SKILL CLAIM AND NOT A RANKING. `fit` and
+// `band` come from provisional thresholds tuned against a tiny fixture,
+// so they indicate "there is relevant evidence worth reading", never
+// "this candidate has skill X" or "this candidate is better than that
+// one". Deliberately a separate request from getJobMatch: a cold or
+// unconfigured model must never delay or break the deterministic score.
+// --------------------------------------------------------------------
+
+/** One piece of the candidate's own stored evidence that sits near the
+ * job's wording. There is no skill field, on purpose. */
+export interface SemanticEvidence {
+  embedding_id: string;
+  source_type: string;
+  source_id: string;
+  evidence_id: string;
+  excerpt: string | null;
+  evidence_source_type: string;
+  evidence_source_identifier: string;
+  similarity: number;
+}
+
+export interface JobSemanticResponse {
+  formula_version: string;
+  /** 0-20. NOT a percentage and not part of overall_score. */
+  fit: number;
+  /** "strong" | "moderate" | "weak" | "none" */
+  band: string;
+  model_identifier: string;
+  considered: number;
+  evidence: SemanticEvidence[];
+}
+
+export async function getJobSemantic(
+  accessToken: string,
+  savedJobId: string,
+): Promise<JobSemanticResponse> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}/semantic`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as JobSemanticResponse;
+}
+
+// --------------------------------------------------------------------
 // Job eligibility (Prompt 5.1a)
 //
 // A SEPARATE DOMAIN FROM THE SKILL MATCH. Nothing below feeds into

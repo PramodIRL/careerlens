@@ -567,3 +567,49 @@ class JobGapResponse(BaseModel):
     needs_confirmation: list[GapEntryResponse] = []
     rejected_requirements: list[GapEntryResponse] = []
     totals: GapTotalsResponse
+
+
+class SemanticEvidenceResponse(BaseModel):
+    """One piece of candidate evidence a job's wording sits near.
+
+    Every field exists so a reader can check the claim: the excerpt is
+    the candidate's own stored words, `similarity` is the number that
+    put it in the list, and the ids let it be traced to the exact rows.
+
+    THERE IS NO SKILL FIELD, deliberately. This says "this evidence
+    looks relevant", never "the candidate has skill X" — that remains
+    the deterministic matcher's business alone.
+    """
+
+    embedding_id: UUID
+    source_type: str
+    source_id: str
+    evidence_id: UUID
+    excerpt: str | None
+    evidence_source_type: str
+    evidence_source_identifier: str
+    similarity: float
+
+
+class JobSemanticResponse(BaseModel):
+    """Semantic relevance for one saved job.
+
+    NOT A CALIBRATED SCORE. `fit` and `band` come from provisional
+    thresholds tuned against a seven-sentence fixture (see
+    app/embeddings/semantic_fit.py) and must not be read as a hiring
+    signal, a ranking, or a measure of competence. They summarise
+    vector-space proximity between a job's wording and evidence the
+    candidate already has stored.
+
+    SEPARATE FROM `/match` ON PURPOSE. `skill_match_v1`'s
+    `overall_score` is unchanged and unaffected by anything here, and
+    nothing in this response can make a required skill count as
+    satisfied.
+    """
+
+    formula_version: str
+    fit: int
+    band: str
+    model_identifier: str
+    considered: int
+    evidence: list[SemanticEvidenceResponse]
