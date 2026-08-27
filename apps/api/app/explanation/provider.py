@@ -26,6 +26,43 @@ from app.settings import Settings, get_settings
 MOCK_PROVIDER_NAME = "mock"
 
 
+# --------------------------------------------------------------------
+# Provider failures (Prompt 6.2)
+#
+# THE SPLIT IS TRANSIENT vs TERMINAL, and it is the same one
+# app/worker.py draws for resume extraction and app/github/base.py draws
+# for the GitHub client: a timeout or an unreachable service may well
+# succeed on a second attempt, and everything else will fail the same
+# way twice. Only the two below are retried.
+#
+# A provider that raises anything NOT descended from
+# `ExplanationProviderError` is treated as terminal. That is deliberate:
+# an unexpected exception type is a bug or a misconfiguration, and
+# retrying a bug just does it twice.
+# --------------------------------------------------------------------
+
+
+class ExplanationProviderError(Exception):
+    """Base for every failure a provider reports."""
+
+
+class ExplanationTimeout(ExplanationProviderError):
+    """The provider did not answer within the configured budget.
+
+    Raised by the adapter's own `asyncio.wait_for`, so it applies to
+    every provider including one that never learned to time itself out.
+    """
+
+
+class ExplanationUnavailable(ExplanationProviderError):
+    """The provider was unreachable, returned a server error, or sent
+    something unusable at the transport level.
+
+    NOT for a response that arrived and failed validation — that is
+    app/explanation/validate.py's business and is never retried.
+    """
+
+
 class ExplanationProvider(Protocol):
     """What the application depends on instead of a concrete provider."""
 
