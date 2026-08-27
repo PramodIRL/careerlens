@@ -15,6 +15,37 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Turn the 5.3 harness into a regression policy with a
+  checked-in `baseline.json`, simple metric-delta rules, and NO
+  third-party CI dependency.
+- **Problem**: The evaluation produced numbers nobody was obliged to
+  look at again. Without a baseline, a change that degrades retrieval
+  merges silently.
+- **Alternatives**: (1) statistical significance testing; (2) a separate
+  path-filtered CI workflow via `dorny/paths-filter`; (3) storing the
+  baseline outside the repo.
+- **Trade-off**: Twelve synthetic cases cannot support a significance
+  test, and a policy nobody can reproduce mentally is one people learn
+  to override — so the rules are absolute deltas argued from the 5.3
+  measurements (0.02 ~= one case of twelve; actual-to-random gap is
+  0.18 at NDCG@5). On CI: GitHub Actions filters paths per WORKFLOW, not
+  per job, so per-job filtering needs a third-party action — and it
+  would buy nothing, because the model-free checks cost milliseconds.
+  They run in the existing pytest step instead.
+- **The limitation, stated rather than hidden**: CI has no model
+  weights, so it verifies fingerprints and config only. A change to
+  `app/embeddings/retrieval.py` moves ranking without moving any
+  fingerprint, so CI passes while validating nothing about it. That
+  requires a local `make evaluate-check`, and it is written into
+  `policy.py`, the README and a test that asserts the docstring still
+  says so.
+- **Outcome**: Baseline + policy landed. Putting `config` (FLOOR / CEIL
+  / TOP_K) in the baseline is what makes a threshold change CI-visible
+  without a model. Re-baselining must happen in the same PR as the
+  change that caused it; a standalone baseline commit is
+  indistinguishable from accepting a regression.
+
+- **Date**: 2026-08-27
 - **Decision**: Measure semantic retrieval against a 12-case synthetic
   benchmark (Prompt 5.3), and change NO production threshold on the
   strength of it.

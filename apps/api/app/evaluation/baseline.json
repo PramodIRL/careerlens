@@ -1,0 +1,46 @@
+{
+  "case_count": 12,
+  "config": {
+    "ceil": 0.6,
+    "floor": 0.2,
+    "top_k": 5.0
+  },
+  "dataset_fingerprint": "19ef35475675fa8dfbace41ed3b98731172ce7aa3e765b5b8e4404e81ba0e06c",
+  "dataset_version": "retrieval-eval-v1",
+  "duplicate_crowding": {
+    "total_slots_lost": 3
+  },
+  "item_count": 56,
+  "metrics": {
+    "3": {
+      "coverage": 1.0,
+      "ndcg": 0.9228,
+      "precision": 0.75,
+      "precision_ceiling": 0.8333,
+      "recall": 0.8958
+    },
+    "5": {
+      "coverage": 1.0,
+      "ndcg": 0.9719,
+      "precision": 0.5167,
+      "precision_ceiling": 0.5167,
+      "recall": 1.0
+    }
+  },
+  "model_identifier": "sentence-transformers/all-MiniLM-L6-v2",
+  "per_case_ndcg_at_5": {
+    "Building data pipelines at scale": 0.9675,
+    "Cloud infrastructure and deployment experience": 1.0,
+    "Continuous integration and automated testing": 0.9829,
+    "Experience building REST APIs": 1.0,
+    "Experience with agile development processes": 0.9197,
+    "Experience with container orchestration": 0.906,
+    "Familiarity with relational databases and SQL": 1.0,
+    "Frontend development with modern JavaScript frameworks": 1.0,
+    "Machine learning model development": 1.0,
+    "Monitoring and incident response": 0.9675,
+    "Strong Python programming skills required": 0.9197,
+    "Version control and code review practices": 1.0
+  },
+  "schema_version": 1
+}

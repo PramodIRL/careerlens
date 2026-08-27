@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill evaluate-retrieval sample-resumes demo-github smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill evaluate-retrieval evaluate-check evaluate-baseline sample-resumes demo-github smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -20,6 +20,8 @@ help:
 	@echo "  make github-skills  Re-derive GitHub skill evidence from stored data (no GitHub calls)"
 	@echo "  make embeddings-backfill  Embed existing evidence/jobs/repos (safe to re-run)"
 	@echo "  make evaluate-retrieval   Grade semantic retrieval against the synthetic benchmark"
+	@echo "  make evaluate-check       Compare against the baseline; fails on regression"
+	@echo "  make evaluate-baseline    Re-baseline (commit in the SAME PR as the change)"
 	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
 	@echo "  make demo-github EMAIL=...  Import the fictional GitHub account for one user"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
@@ -128,6 +130,21 @@ embeddings-backfill:
 # real-world hiring validation; see app/evaluation/dataset.py.
 evaluate-retrieval:
 	cd apps/api && uv run python -m scripts.evaluate_retrieval
+
+# Compares a fresh evaluation against app/evaluation/baseline.json and
+# exits non-zero on a regression. NEEDS THE REAL MODEL, so it is local:
+# CI enforces only the fingerprint/config half. Run this before merging
+# any change to app/embeddings/retrieval.py — that file moves ranking
+# without moving any fingerprint, so CI cannot see it.
+evaluate-check:
+	cd apps/api && uv run python -m scripts.evaluate_retrieval --check
+
+# Rewrites the baseline. Only for an INTENTIONAL metric change, and the
+# result must be committed in the same PR as the change that caused it —
+# a standalone baseline commit is indistinguishable from quietly
+# accepting a regression.
+evaluate-baseline:
+	cd apps/api && uv run python -m scripts.evaluate_retrieval --update-baseline
 
 sample-resumes:
 	cd apps/api && uv run python -m scripts.sample_resumes

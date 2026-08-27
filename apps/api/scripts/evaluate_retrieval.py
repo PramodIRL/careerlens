@@ -1,8 +1,15 @@
 """Grade semantic retrieval against the synthetic benchmark (Prompt 5.3).
 
-Run it with:
-    make evaluate-retrieval
-(or: cd apps/api && uv run python -m scripts.evaluate_retrieval)
+Three modes:
+    make evaluate-retrieval   print the report
+    make evaluate-check       compare against the baseline, exit 1 on regression
+    make evaluate-baseline    rewrite the baseline (an intentional change)
+
+ALL THREE NEED THE REAL MODEL, so all three are local. CI enforces only
+the model-independent half — fingerprints and config — via
+tests/test_evaluation_policy.py. A change to app/embeddings/retrieval.py
+alters ranking WITHOUT changing any fingerprint, so a green CI run says
+nothing about it: run `make evaluate-check` locally before merging one.
 
 MEASURES, CHANGES NOTHING. It reads no database, writes no row, and
 touches no threshold. `semantic_fit_v1`'s FLOOR, CEIL and TOP_K are
@@ -24,54 +31,72 @@ produce identical numbers, and the header stamps the model and dataset
 version that produced them.
 """
 
+import sys
+from pathlib import Path
+
 from app.embeddings.provider import LocalSentenceEmbeddingProvider
 from app.embeddings.semantic_fit import SIMILARITY_CEIL, SIMILARITY_FLOOR, TOP_K
 from app.evaluation.dataset import BENCHMARK, DATASET_VERSION, Label, is_relevant, total_items
 from app.evaluation.metrics import (
     RankedItem,
     duplicate_crowding_at_k,
-    has_result,
-    ndcg_at_k,
-    precision_at_k,
-    precision_ceiling_at_k,
     rank,
-    recall_at_k,
     similarity_by_label,
     summarise,
+)
+from app.evaluation.policy import compare, describe
+from app.evaluation.report import (
+    EvaluationReport,
+    build_report,
+    from_json,
+    to_json,
 )
 
 _REPORTED_K = (3, 5)
 
 
-def _ranked_cases(provider: LocalSentenceEmbeddingProvider) -> list[list[RankedItem]]:
-    """Every case scored and ranked once, reused by every metric below."""
-    cases: list[list[RankedItem]] = []
+BASELINE_PATH = Path(__file__).resolve().parents[1] / "app" / "evaluation" / "baseline.json"
+
+
+def _ranked_cases(
+    provider: LocalSentenceEmbeddingProvider,
+) -> list[tuple[str, list[RankedItem]]]:
+    """Every case scored and ranked once, paired with its query so
+    per-case metrics can be keyed by it."""
+    cases: list[tuple[str, list[RankedItem]]] = []
     for case in BENCHMARK:
         query = provider.embed_text_sync(case.query)
         cases.append(
-            rank(
-                [
-                    RankedItem(
-                        text=item.text,
-                        label=item.label,
-                        similarity=sum(
-                            a * b for a, b in zip(query, provider.embed_text_sync(item.text))
-                        ),
-                        duplicate_group=item.duplicate_group,
-                    )
-                    for item in case.items
-                ]
+            (
+                case.query,
+                rank(
+                    [
+                        RankedItem(
+                            text=item.text,
+                            label=item.label,
+                            similarity=sum(
+                                a * b for a, b in zip(query, provider.embed_text_sync(item.text))
+                            ),
+                            duplicate_group=item.duplicate_group,
+                        )
+                        for item in case.items
+                    ]
+                ),
             )
         )
     return cases
 
 
-def main() -> None:
+def _current_report() -> tuple[EvaluationReport, list[list[RankedItem]]]:
     provider = LocalSentenceEmbeddingProvider()
-    cases = _ranked_cases(provider)
+    ranked = _ranked_cases(provider)
+    report = build_report(ranked, model_identifier=provider.model_identifier)
+    return report, [case for _, case in ranked]
 
+
+def _print_report(report: EvaluationReport, cases: list[list[RankedItem]]) -> None:
     print("Semantic retrieval evaluation")
-    print(f"  model           {provider.model_identifier}")
+    print(f"  model           {report.model_identifier}")
     print(f"  dataset         {DATASET_VERSION} — {len(BENCHMARK)} cases, {total_items()} items")
     print(f"  current config  FLOOR={SIMILARITY_FLOOR} CEIL={SIMILARITY_CEIL} TOP_K={TOP_K}")
     print("  NOT real-world hiring validation — developer-authored synthetic cases.")
@@ -79,14 +104,11 @@ def main() -> None:
     print("\nRanking quality")
     print(f"  {'K':>3}  {'P@K':>6} {'ceil':>6}  {'R@K':>6}  {'NDCG@K':>7}  {'coverage':>9}")
     for k in _REPORTED_K:
-        precision = sum(precision_at_k(c, k) for c in cases) / len(cases)
-        ceiling = sum(precision_ceiling_at_k(c, k) for c in cases) / len(cases)
-        recall = sum(recall_at_k(c, k) for c in cases) / len(cases)
-        ndcg = sum(ndcg_at_k(c, k) for c in cases) / len(cases)
-        covered = sum(1 for c in cases if has_result(c, SIMILARITY_FLOOR, k))
+        metric = report.metrics[k]
+        covered = round(metric.coverage * len(cases))
         print(
-            f"  {k:>3}  {precision:>6.3f} {ceiling:>6.3f}  {recall:>6.3f}  "
-            f"{ndcg:>7.3f}  {covered:>4}/{len(cases):<4}"
+            f"  {k:>3}  {metric.precision:>6.3f} {metric.precision_ceiling:>6.3f}  "
+            f"{metric.recall:>6.3f}  {metric.ndcg:>7.3f}  {covered:>4}/{len(cases):<4}"
         )
 
     print("\nSimilarity by label")
@@ -122,6 +144,30 @@ def main() -> None:
         if lost:
             print(f"  {lost} slot(s) lost at K={TOP_K}: {benchmark_case.query!r}")
     print(f"  total slots lost across {len(cases)} cases: {total_lost}")
+
+
+def main() -> None:
+    """Default prints the report; --check compares; --update-baseline
+    rewrites it."""
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    report, cases = _current_report()
+
+    if mode == "--update-baseline":
+        BASELINE_PATH.write_text(to_json(report))
+        print(f"baseline written: {BASELINE_PATH}")
+        print("Commit this IN THE SAME PR as the change that caused the movement —")
+        print("a standalone baseline update is indistinguishable from accepting a regression.")
+        return
+
+    if mode == "--check":
+        if not BASELINE_PATH.exists():
+            print(f"no baseline at {BASELINE_PATH} — run `make evaluate-baseline`")
+            sys.exit(1)
+        result = compare(from_json(BASELINE_PATH.read_text()), report)
+        print(describe(result))
+        sys.exit(0 if result.ok else 1)
+
+    _print_report(report, cases)
 
 
 if __name__ == "__main__":
