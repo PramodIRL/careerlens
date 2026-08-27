@@ -47,6 +47,11 @@ from app.eligibility.resolve import RequirementInput as EligibilityRequirementIn
 from app.eligibility.resolve import resolve_eligibility
 from app.embeddings.provider import get_embedding_provider
 from app.embeddings.semantic_fit import compute_semantic_fit
+from app.explanation.adapter import ExplanationOutcome, explain
+from app.explanation.facts import build_facts, load_evidence_by_skill, load_taxonomy_names
+from app.explanation.provider import get_explanation_provider
+from app.explanation.schema import SCHEMA_VERSION as EXPLANATION_SCHEMA_VERSION
+from app.explanation.schema import ExplanationFacts
 from app.job_requirements.extract import extract_job_requirements, list_job_requirements
 from app.matching.resolve import (
     ResolutionState,
@@ -69,6 +74,12 @@ from app.schemas.eligibility import (
     EligibilityRequirementType,
     EligibilityTotalsResponse,
     JobEligibilityResponse,
+)
+from app.schemas.explanation import (
+    CitedEvidenceResponse,
+    ExplanationClaimResponse,
+    ExplanationStatus,
+    JobExplanationResponse,
 )
 from app.schemas.saved_job import (
     GapEntryResponse,
@@ -851,3 +862,126 @@ async def read_saved_job_semantic(
             for hit in result.hits
         ],
     )
+
+
+# --------------------------------------------------------------------
+# Structured LLM explanation (Prompt 6.1)
+#
+# THE MODEL EXPLAINS; IT NEVER DECIDES. `overall_score` below is echoed
+# out of the same `/match` response the panel above renders — this route
+# calls that handler rather than recomputing anything, so "the score is
+# unchanged" is the same code path, not a second implementation that
+# could drift. Nothing here writes a row, and no LLM output reaches the
+# response unless app/explanation/validate.py accepted it whole.
+# --------------------------------------------------------------------
+
+
+@router.get("/{saved_job_id}/explanation", response_model=JobExplanationResponse)
+async def read_saved_job_explanation(
+    saved_job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> JobExplanationResponse:
+    """A structured, validated explanation of this job's match.
+
+    STRICTLY READ-ONLY. No INSERT, no UPDATE, no commit — and nothing
+    persists the explanation either. A stored one would be a cache with
+    no invalidation trigger, stale the moment a skill is confirmed or
+    the description edited, exactly as `/match` and `/gaps` already
+    argue about themselves.
+
+    BUILT ON THE THREE EXISTING HANDLERS. `/match`, `/gaps` and
+    `/semantic` are called directly, so this route cannot disagree with
+    the panels beside it and cannot alter what they return. Ownership is
+    proved inside each of them by the same `_get_owned_job`.
+
+    A REJECTION IS A 200. The deterministic answer is intact and worth
+    serving; the model failing to explain it is not an error in the
+    match. `status` says which happened, `reason` says what was wrong,
+    and NO generated content is returned when the answer was rejected —
+    not a truncated version, not the claims that happened to pass.
+
+    THE EXCERPTS ARE UNTRUSTED. They are resume and README text written
+    by third parties, passed to the provider as data (see
+    app/explanation/prompt.py). The guarantee is not that the model
+    behaves — it is that an injected claim fails validation on the way
+    back.
+    """
+    saved_job = await _get_owned_job(db, saved_job_id, current_user)
+
+    match = await read_saved_job_match(saved_job_id, current_user, db)
+    gaps = await read_saved_job_gaps(saved_job_id, current_user, db)
+    semantic = await read_saved_job_semantic(saved_job_id, current_user, db)
+
+    # Evidence ids, which the match response deliberately does not
+    # carry — see app/explanation/facts.py. Bounded by the skills this
+    # job asks about.
+    skill_ids = [item.skill_id for item in match.matched_skills]
+    skill_ids.extend(item.skill_id for item in match.missing_skills)
+    evidence_by_skill = await load_evidence_by_skill(
+        db, user_id=current_user.id, skill_ids=skill_ids
+    )
+
+    facts = build_facts(
+        job=saved_job,
+        match=match,
+        gaps=gaps,
+        semantic=semantic,
+        evidence_by_skill=evidence_by_skill,
+    )
+    outcome = await explain(
+        facts,
+        provider=get_explanation_provider(),
+        taxonomy=await load_taxonomy_names(db),
+    )
+
+    return _to_explanation_response(outcome, facts, match, gaps, semantic)
+
+
+def _to_explanation_response(
+    outcome: ExplanationOutcome,
+    facts: ExplanationFacts,
+    match: JobMatchResponse,
+    gaps: JobGapResponse,
+    semantic: JobSemanticResponse,
+) -> JobExplanationResponse:
+    """The deterministic half is filled in either way; the generated
+    half only when the explanation was accepted."""
+    response = JobExplanationResponse(
+        status=ExplanationStatus(outcome.status),
+        reason=outcome.reason,
+        schema_version=EXPLANATION_SCHEMA_VERSION,
+        provider=outcome.provider,
+        match_formula_version=match.formula_version,
+        overall_score=match.overall_score,
+        has_requirements=match.has_requirements,
+        gap_formula_version=gaps.formula_version,
+        semantic_formula_version=semantic.formula_version,
+    )
+    if outcome.explanation is None:
+        return response
+
+    explanation = outcome.explanation
+    # Excerpts come from the FACTS, never from the model: it chooses
+    # which rows to point at and supplies none of their text.
+    known = facts.evidence_by_id()
+    response.summary = explanation.summary
+    response.strengths = [
+        ExplanationClaimResponse(text=claim.text, evidence_ids=claim.evidence_ids)
+        for claim in explanation.strengths
+    ]
+    response.gaps = [
+        ExplanationClaimResponse(text=claim.text, evidence_ids=claim.evidence_ids)
+        for claim in explanation.gaps
+    ]
+    response.next_steps = list(explanation.next_steps)
+    response.cited_evidence = [
+        CitedEvidenceResponse(
+            evidence_id=row.evidence_id,
+            source_type=row.source_type,
+            source_identifier=row.source_identifier,
+            excerpt=row.excerpt,
+        )
+        for row in (known[evidence_id] for evidence_id in explanation.cited_evidence_ids)
+    ]
+    return response

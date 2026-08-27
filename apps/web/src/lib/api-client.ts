@@ -982,6 +982,70 @@ export async function getJobSemantic(
 }
 
 // --------------------------------------------------------------------
+// Structured LLM explanation (Prompt 6.1)
+//
+// THE MODEL EXPLAINS; IT NEVER DECIDES. `overall_score` below is the
+// same number `getJobMatch` returns — echoed from the persisted facts,
+// not produced by a model, which can neither compute nor adjust it.
+//
+// A REJECTION IS A NORMAL 200. When `status` is "rejected" the score is
+// still here and every generated field is empty: the API returns no
+// ungrounded content, not even the parts that passed validation.
+// --------------------------------------------------------------------
+
+/** One real `skill_evidence` row an explanation cited. The excerpt is
+ * the candidate's own stored text, hydrated server-side from the facts
+ * — the model chooses which rows to point at and supplies none of their
+ * words. */
+export interface CitedEvidence {
+  evidence_id: string;
+  source_type: string;
+  source_identifier: string;
+  excerpt: string | null;
+}
+
+export interface ExplanationClaim {
+  text: string;
+  /** Always a subset of `cited_evidence`'s ids. */
+  evidence_ids: string[];
+}
+
+export interface JobExplanationResponse {
+  /** "generated" | "rejected" */
+  status: string;
+  /** Machine-readable, null when generated (e.g. "unknown_evidence_id"). */
+  reason: string | null;
+  schema_version: string;
+  provider: string;
+  /** Deterministic — present whether or not the explanation was accepted. */
+  match_formula_version: string;
+  overall_score: number;
+  has_requirements: boolean;
+  gap_formula_version: string;
+  semantic_formula_version: string;
+  /** Generated — null/empty when rejected. */
+  summary: string | null;
+  strengths: ExplanationClaim[];
+  gaps: ExplanationClaim[];
+  next_steps: string[];
+  cited_evidence: CitedEvidence[];
+}
+
+export async function getJobExplanation(
+  accessToken: string,
+  savedJobId: string,
+): Promise<JobExplanationResponse> {
+  const response = await fetch(`${SAVED_JOB_BASE}/${savedJobId}/explanation`, {
+    credentials: "include",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await parseErrorMessage(response));
+  }
+  return (await response.json()) as JobExplanationResponse;
+}
+
+// --------------------------------------------------------------------
 // Job eligibility (Prompt 5.1a)
 //
 // A SEPARATE DOMAIN FROM THE SKILL MATCH. Nothing below feeds into

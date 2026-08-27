@@ -165,6 +165,18 @@ class Settings(BaseSettings):
     # different width would need a migration, not a config change.
     embedding_local_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
+    # --- LLM explanations (Prompt 6.1) -------------------------------
+    # THERE IS NO LLM CREDENTIAL HERE AND NO VARIABLE NAME FOR ONE. The
+    # only provider that exists is a deterministic local mock: no key is
+    # read or requested, and no model service is ever called. A real
+    # provider is a later slice, and it brings its own decisions about
+    # timeouts, retries and where its credential lives.
+    #
+    # An unknown name raises rather than falling back to the mock —
+    # serving templated placeholder prose as though a model had written
+    # it is the one failure this feature cannot afford.
+    explanation_provider: str = "mock"
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""
