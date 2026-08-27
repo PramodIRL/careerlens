@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills sample-resumes demo-github smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill sample-resumes demo-github smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -18,6 +18,7 @@ help:
 	@echo "  make requeue-stuck-resumes  Re-enqueue resumes stuck in 'queued' (safe to re-run)"
 	@echo "  make seed-skills    Seed/update the canonical skill taxonomy (safe to re-run)"
 	@echo "  make github-skills  Re-derive GitHub skill evidence from stored data (no GitHub calls)"
+	@echo "  make embeddings-backfill  Embed existing evidence/jobs/repos (safe to re-run)"
 	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
 	@echo "  make demo-github EMAIL=...  Import the fictional GitHub account for one user"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
@@ -113,6 +114,13 @@ github-skills:
 # the demo goes through the real upload/extraction flow. The output
 # directory is inside the already-gitignored apps/api/var/, so a
 # generated document cannot be committed. Safe to re-run; overwrites.
+# Populates the embeddings table from data already in the database
+# (Prompt 5.2a). Safe to re-run: unchanged content is skipped without
+# calling the provider. Uses the local deterministic mock provider —
+# there is no embedding credential in this product.
+embeddings-backfill:
+	cd apps/api && uv run python -m scripts.backfill_embeddings
+
 sample-resumes:
 	cd apps/api && uv run python -m scripts.sample_resumes
 
