@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill sample-resumes demo-github smoke
+.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill evaluate-retrieval sample-resumes demo-github smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -19,6 +19,7 @@ help:
 	@echo "  make seed-skills    Seed/update the canonical skill taxonomy (safe to re-run)"
 	@echo "  make github-skills  Re-derive GitHub skill evidence from stored data (no GitHub calls)"
 	@echo "  make embeddings-backfill  Embed existing evidence/jobs/repos (safe to re-run)"
+	@echo "  make evaluate-retrieval   Grade semantic retrieval against the synthetic benchmark"
 	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
 	@echo "  make demo-github EMAIL=...  Import the fictional GitHub account for one user"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
@@ -120,6 +121,13 @@ github-skills:
 # there is no embedding credential in this product.
 embeddings-backfill:
 	cd apps/api && uv run python -m scripts.backfill_embeddings
+
+# Grades semantic retrieval against the developer-authored synthetic
+# benchmark (Prompt 5.3). Reads nothing from the database and changes no
+# threshold — it reports what the current configuration does. NOT
+# real-world hiring validation; see app/evaluation/dataset.py.
+evaluate-retrieval:
+	cd apps/api && uv run python -m scripts.evaluate_retrieval
 
 sample-resumes:
 	cd apps/api && uv run python -m scripts.sample_resumes

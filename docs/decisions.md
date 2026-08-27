@@ -15,6 +15,38 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Measure semantic retrieval against a 12-case synthetic
+  benchmark (Prompt 5.3), and change NO production threshold on the
+  strength of it.
+- **Problem**: `semantic_fit_v1` shipped with FLOOR=0.20 / CEIL=0.60
+  derived from a seven-sentence fixture, explicitly labelled provisional
+  and owed a real measurement.
+- **Findings** (`retrieval-eval-v1`, 12 cases / 56 items,
+  all-MiniLM-L6-v2, `make evaluate-retrieval`):
+  - Ranking is sound: NDCG@3 0.923, NDCG@5 0.972, Recall@5 1.000,
+    coverage 12/12. Precision@5 (0.517) exactly equals its own ceiling,
+    so every relevant item that could be in the window is in it.
+  - **FLOOR=0.20 is well placed for the relevant/unrelated boundary**:
+    31/31 relevant items admitted, 0/14 unrelated admitted. The margin
+    is thin — unrelated max 0.186 against relevant-paraphrase min 0.232.
+  - **CEIL=0.60 is effectively unreachable for paraphrases**: only 1 of
+    19 clears it, while lexical overlap reaches 0.825. A candidate whose
+    evidence matches in different words is capped near fit 15/20 while
+    keyword overlap saturates at 20 — the formula currently rewards the
+    surface overlap semantic search exists to look past.
+  - **No threshold separates lexical distractors**: 9/11 clear the
+    floor, and their range (0.151-0.529) overlaps relevant paraphrases
+    (0.232-0.613) almost entirely.
+  - Duplicate crowding is real but small: 3 top-5 slots lost across 12
+    cases.
+- **Trade-off**: The benchmark is authored by the same person building
+  the feature, so queries and evidence were written together — a known
+  bias. It is fit for catching direction-of-travel regressions and
+  unfit for any claim about real-world hiring accuracy.
+- **Outcome**: Harness landed, thresholds untouched. Changing CEIL and
+  handling lexical distractors are proposals for a later reviewed slice.
+
+- **Date**: 2026-08-27
 - **Decision**: Adopt `fastembed` running
   `sentence-transformers/all-MiniLM-L6-v2` as the real local embedding
   provider, rather than the official `sentence-transformers` package.
