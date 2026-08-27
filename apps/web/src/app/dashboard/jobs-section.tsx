@@ -23,6 +23,7 @@ import {
 } from "@/lib/api-client";
 
 import JobEligibilityPanel from "./job-eligibility-panel";
+import JobExplanationPanel from "./job-explanation-panel";
 import JobGapPanel from "./job-gap-panel";
 import JobMatchPanel from "./job-match-panel";
 import JobSemanticPanel from "./job-semantic-panel";
@@ -573,6 +574,16 @@ export default function JobsSection({
                         accessToken={accessToken}
                         savedJobId={job.id}
                         refreshKey={refreshKey}
+                      />
+                    </div>
+                    {/* LAST, and opt-in. Generated prose is the weakest
+                        claim on the page: it explains the numbers above
+                        and must never appear to produce them, so it
+                        loads only when the user asks for it. */}
+                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                      <JobExplanationPanel
+                        accessToken={accessToken}
+                        savedJobId={job.id}
                       />
                     </div>
                   </div>

@@ -15,6 +15,46 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Ground the 6.1 LLM explanation by CONSTRUCTION on the way
+  in and by VALIDATION on the way out, and return a rejection as a
+  200 with `status`/`reason` rather than an HTTP error.
+- **Problem**: An LLM asked to explain a match will happily invent a
+  skill, a requirement or a number, and prose is exactly the surface
+  where an invention is most believable. docs/project-brief.md's
+  Evidence-First rule says it may explain persisted results and never
+  invent — which needs a mechanism, not an instruction in a prompt.
+- **Alternatives**: (1) trust the system prompt; (2) filter the bad
+  claims out and keep the rest; (3) 502 on an invalid response;
+  (4) persist explanations.
+- **Trade-off**: Prompt wording depends on a model complying, and a
+  guarantee that depends on compliance is not one — so the input schema
+  has NO field for a resume, README or job description (raw text cannot
+  leak because there is nowhere to put it), and the output is checked
+  against the facts it was given: unknown evidence id, uncited strength,
+  out-of-facts taxonomy skill, or a number absent from the facts all
+  reject the WHOLE answer. Filtering was rejected because "we removed
+  the parts we could detect" is not a claim worth making. A 502 was
+  rejected because the deterministic score is intact and worth serving —
+  the model failing to explain it is not an error in the match — so
+  `status: "rejected"` plus a machine-readable `reason` carries the
+  outcome with no generated content attached.
+- **The limits, stated rather than hidden**: the number check asks only
+  whether a quantity appears in the facts at all, so "3 years" survives
+  when 3 is a requirement weight; the skill check can only see names in
+  the ~33-entry curated taxonomy and is case-sensitive (so it does not
+  reject "go through your gaps"); and a fluent sentence built from
+  in-vocabulary words is not mechanically detectable. Requiring a
+  citation on every strength is what bounds that residue. All three are
+  written into app/explanation/validate.py's docstring and pinned by a
+  test.
+- **Outcome**: `/explanation` calls the existing `/match`, `/gaps` and
+  `/semantic` handlers directly rather than recomputing, which makes
+  "the score is unchanged" the same code path instead of a second
+  implementation that could drift — and a test asserts both responses
+  are byte-identical around an explanation request. Mock provider only;
+  no credential, no hosted provider, no persistence, no migration.
+
+- **Date**: 2026-08-27
 - **Decision**: Turn the 5.3 harness into a regression policy with a
   checked-in `baseline.json`, simple metric-delta rules, and NO
   third-party CI dependency.
