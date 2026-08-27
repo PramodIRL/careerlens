@@ -15,6 +15,21 @@ and `MatchedEvidenceResponse` does not carry them. Rather than add a
 field to the match response — in the slice that promises `/match` is
 byte-for-byte unchanged — this module loads them itself, bounded by the
 skills this job actually asks about.
+
+THE BUNDLE IS CAPPED (Prompt 6.2). "Bounded by the skills this job asks
+about" was never a bound on SIZE: a candidate accumulates evidence per
+skill without limit, and an uncapped bundle is a prompt that grows with
+somebody else's import history. The cap is applied PER SKILL, before
+`SkillFact.evidence_ids` is built, so a fact can never cite a row the
+cap dropped — a citation to a dropped row would be indistinguishable
+from an invented one and would reject every explanation.
+
+EXCERPTS ARE NORMALIZED, NOT SANITIZED. Control characters are stripped
+and the length re-capped. This is hygiene, NOT the injection defence:
+excerpts travel as JSON string values, and it is JSON escaping that
+makes them structurally unable to break out of the document (see
+app/explanation/prompt.py). Stripping characters would be a poor
+substitute for that and is not treated as one.
 """
 
 import uuid
@@ -23,6 +38,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.explanation.schema import (
+    MAX_EVIDENCE_ITEMS,
+    MAX_EVIDENCE_PER_SKILL,
+    MAX_EXCERPT_CHARS,
     EvidenceFact,
     ExplanationFacts,
     GapFacts,
@@ -91,7 +109,24 @@ async def load_evidence_by_skill(
     grouped: dict[uuid.UUID, list[SkillEvidence]] = {}
     for row in rows:
         grouped.setdefault(skill_by_candidate[row.candidate_skill_id], []).append(row)
-    return grouped
+    # Capped here rather than in the query: the ORDER BY is what makes
+    # the choice deterministic, and slicing after grouping keeps that
+    # obvious. Bounded input, so a prompt cannot grow with an import
+    # history.
+    return {skill_id: rows[:MAX_EVIDENCE_PER_SKILL] for skill_id, rows in grouped.items()}
+
+
+def _normalize_excerpt(excerpt: str | None) -> str | None:
+    """Strip control characters and re-cap the length.
+
+    Hygiene only. The excerpt is third-party text and stays third-party
+    text — what stops it escaping into the instruction is JSON encoding,
+    not this function.
+    """
+    if excerpt is None:
+        return None
+    cleaned = "".join(char for char in excerpt if char.isprintable() or char == "\n")
+    return cleaned[:MAX_EXCERPT_CHARS]
 
 
 def build_facts(
@@ -107,20 +142,44 @@ def build_facts(
     codebase keeps between deriving facts and acting on them."""
     catalogue: dict[uuid.UUID, EvidenceFact] = {}
 
+    def _admit(
+        evidence_id: uuid.UUID,
+        *,
+        source_type: str,
+        source_identifier: str,
+        excerpt: str | None,
+    ) -> bool:
+        """Add one row to the citable catalogue, or refuse it because the
+        bundle is full.
+
+        A refusal means the id is NOT cited anywhere either — a fact
+        pointing at a row the cap dropped would be indistinguishable
+        from an invented citation and would reject every explanation
+        built from this bundle.
+        """
+        if evidence_id in catalogue:
+            return True
+        if len(catalogue) >= MAX_EVIDENCE_ITEMS:
+            return False
+        catalogue[evidence_id] = EvidenceFact(
+            evidence_id=evidence_id,
+            source_type=source_type,
+            source_identifier=source_identifier,
+            excerpt=_normalize_excerpt(excerpt),
+        )
+        return True
+
     def _evidence_ids(skill_id: uuid.UUID) -> list[uuid.UUID]:
-        ids: list[uuid.UUID] = []
-        for row in evidence_by_skill.get(skill_id, []):
-            catalogue.setdefault(
+        return [
+            row.id
+            for row in evidence_by_skill.get(skill_id, [])
+            if _admit(
                 row.id,
-                EvidenceFact(
-                    evidence_id=row.id,
-                    source_type=row.source_type,
-                    source_identifier=row.source_identifier,
-                    excerpt=row.excerpt,
-                ),
+                source_type=row.source_type,
+                source_identifier=row.source_identifier,
+                excerpt=row.excerpt,
             )
-            ids.append(row.id)
-        return ids
+        ]
 
     matched = [
         SkillFact(
@@ -157,15 +216,13 @@ def build_facts(
     # or a legitimate citation would read as unknown.
     hits: list[SemanticHitFact] = []
     for hit in semantic.evidence:
-        catalogue.setdefault(
+        if not _admit(
             hit.evidence_id,
-            EvidenceFact(
-                evidence_id=hit.evidence_id,
-                source_type=hit.evidence_source_type,
-                source_identifier=hit.evidence_source_identifier,
-                excerpt=hit.excerpt,
-            ),
-        )
+            source_type=hit.evidence_source_type,
+            source_identifier=hit.evidence_source_identifier,
+            excerpt=hit.excerpt,
+        ):
+            continue
         hits.append(SemanticHitFact(evidence_id=hit.evidence_id, similarity=hit.similarity))
 
     return ExplanationFacts(

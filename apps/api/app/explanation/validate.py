@@ -72,6 +72,16 @@ class RejectionReason(StrEnum):
     INVENTED_NUMBER = "invented_number"
     DISALLOWED_LINK = "disallowed_link"
 
+    # --- provider failures (Prompt 6.2) ------------------------------
+    # One vocabulary for `reason`, so a client has a single set of
+    # values to understand rather than "these come from the validator
+    # and those from somewhere else". Nothing below is raised by this
+    # module — app/explanation/adapter.py reports them — but they are
+    # the same field, so they belong in the same enum.
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    PROVIDER_ERROR = "provider_error"
+
 
 class ExplanationRejected(Exception):
     """One rejected explanation, and why.

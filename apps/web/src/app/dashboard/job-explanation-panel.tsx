@@ -49,7 +49,11 @@ const REASON_LABEL: Record<string, string> = {
   invented_number: "it stated a number the stored facts do not contain",
   disallowed_link: "it included a link",
   response_too_large: "the response was too long",
-  provider_error: "the explanation service did not respond",
+  // Provider-side failures (Prompt 6.2). Already retried where retrying
+  // could help, so these mean the attempts were used up.
+  provider_timeout: "the explanation service did not answer in time",
+  provider_unavailable: "the explanation service was unavailable",
+  provider_error: "the explanation service failed unexpectedly",
 };
 
 function ClaimList({

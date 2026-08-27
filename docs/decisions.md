@@ -15,6 +15,50 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Retry the LLM explanation's TRANSPORT and never its
+  CONTENT: one retry on timeout/unavailable, none on any validation
+  failure, with a 10s per-attempt budget applied by the adapter.
+- **Problem**: 6.1 had no timeout (a hung provider hangs a request-path
+  route), no retry (one blip costs the user their explanation), an
+  untyped `except Exception` that could not tell transient from
+  terminal, and no logging at all — so a rejection was undiagnosable.
+- **Alternatives**: (1) retry everything until something validates;
+  (2) exponential backoff; (3) a timeout inside each provider;
+  (4) log the rejection detail to debug groundings.
+- **Trade-off**: Retrying a validation failure is the tempting one and
+  the wrong one. It spends money to re-roll a dice the user does not
+  need rolled — they already have the deterministic score — and it
+  turns one hallucination into a loop that eventually gets lucky and
+  SHOWS one. So `return` on `ExplanationRejected` is the whole policy,
+  and `attempts` is on the outcome purely so a test can prove the call
+  count was 1. Exponential backoff with two attempts is decoration.
+  The timeout lives in the adapter, not the provider, so a future
+  client library that forgot its own deadline still gets one.
+- **On logging**: the detail field quotes model output and the excerpts
+  are somebody's resume, so `adapter.py` is the ONLY module in the
+  feature that logs — one file to audit rather than a habit spread over
+  six. It records job id, provider, attempt, reason and elapsed ms, and
+  `type(error).__name__` rather than `logger.exception`, because a real
+  client's traceback can carry the request body and a stack trace is
+  exactly where an excerpt reappears unnoticed. A parameterised test
+  runs the whole path under `caplog` and asserts the excerpt, the model
+  output, the title and the company are absent.
+- **On the input bound**: nothing capped the fact bundle, so a prompt
+  grew with a candidate's import history. Capped per skill (3) BEFORE
+  ids are built — a fact citing a row the cap dropped is
+  indistinguishable from an invented citation — plus a 40-row backstop.
+- **The honest part**: the `<untrusted_data>` markers are defence in
+  depth, NOT the boundary. JSON encoding is what stops an excerpt
+  escaping its own string, and the test asserts that structural
+  property directly instead of trusting the tags. The markers exist for
+  a provider that receives instruction and data concatenated.
+- **Outcome**: reason values `provider_timeout` / `provider_unavailable`
+  / `provider_error` joined `RejectionReason` so `reason` has one
+  vocabulary. Route contract, score, gaps, eligibility and semantic fit
+  unchanged; the job description still never reaches the model, pinned
+  by its own test.
+
+- **Date**: 2026-08-27
 - **Decision**: Ground the 6.1 LLM explanation by CONSTRUCTION on the way
   in and by VALIDATION on the way out, and return a rejection as a
   200 with `status`/`reason` rather than an HTTP error.

@@ -33,6 +33,24 @@ MAX_CLAIM_CITATIONS = 5
 # Ceiling on the raw provider response before anything is parsed.
 MAX_RESPONSE_BYTES = 16_000
 
+# --- input bounds (Prompt 6.2) ---------------------------------------
+# The fact bundle is built from a candidate's OWN stored rows, and
+# nothing bounded how many there were: a job touching ten skills, for a
+# candidate with twenty imported repositories, could assemble a
+# six-figure-character prompt. That is a cost, a latency and a
+# context-flooding problem at once, so the bundle is capped here.
+#
+# Per skill first, so the cap is applied BEFORE `SkillFact.evidence_ids`
+# is built and a fact can never cite a row the cap dropped. Rows arrive
+# ordered by (created_at, id), so which three survive is deterministic.
+MAX_EVIDENCE_PER_SKILL = 3
+# Backstop across the whole bundle. 40 x 500 characters is ~20 KB of
+# excerpt, which is a readable amount of evidence and a sane prompt.
+MAX_EVIDENCE_ITEMS = 40
+# Matches `skill_evidence.excerpt`'s column width. A no-op today, kept
+# so the prompt stays bounded if that column ever grows.
+MAX_EXCERPT_CHARS = 500
+
 
 # --------------------------------------------------------------------
 # Input — assembled from persisted rows by app/explanation/facts.py

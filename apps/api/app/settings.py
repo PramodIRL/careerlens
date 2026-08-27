@@ -177,6 +177,26 @@ class Settings(BaseSettings):
     # it is the one failure this feature cannot afford.
     explanation_provider: str = "mock"
 
+    # Hard budget for ONE provider call, applied by the adapter rather
+    # than trusted to a provider's own client (Prompt 6.2). A hung
+    # request in the API's own request path is a stalled page for the
+    # user and a held connection for the server, and neither becomes
+    # acceptable because a model is slow.
+    explanation_timeout_seconds: float = 10.0
+    # Total provider calls, including the first. Only a TIMEOUT or an
+    # UNAVAILABLE provider is retried — a response that arrived and
+    # failed validation never is, because re-asking spends money to
+    # re-roll a hallucination the user does not need re-rolled.
+    #
+    # 2 rather than "a few": the retry repeats exactly one thing, the
+    # provider call, and this cap is the only thing bounding what that
+    # costs. Worst-case wait is
+    # attempts x timeout + (attempts - 1) x backoff.
+    explanation_max_attempts: int = 2
+    # Fixed, not exponential. With two attempts an exponential schedule
+    # is decoration.
+    explanation_retry_backoff_seconds: float = 0.5
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""
