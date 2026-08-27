@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, Callable, Generator
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import app.models  # noqa: F401  (registers ORM models onto Base.metadata)
@@ -15,21 +15,101 @@ from app.settings import get_settings
 # Dedicated Postgres schema used only by the test suite, so tests never
 # read or write the dev database's default ("public") schema.
 TEST_SCHEMA = "careerlens_test"
-# `public` trails the test schema on the search path because that is
-# where the pgvector EXTENSION lives — an extension belongs to exactly
-# one schema per database, and both `infra/postgres/init.sql` and the
-# enable-pgvector migration install it into `public`. Without it on the
-# path, creating the `embeddings` table fails with `type "vector" does
-# not exist`.
+# `public` trails the test schema on the search path SOLELY so that the
+# bare `vector` type name inside `embeddings`'s column DDL resolves — an
+# extension belongs to exactly one schema per database, and both
+# `infra/postgres/init.sql` and the enable-pgvector migration install it
+# into `public`.
 #
-# This does not weaken the isolation the schema exists for: every
-# product table is created in TEST_SCHEMA by `Base.metadata.create_all`
-# below, and TEST_SCHEMA comes first, so a table name always resolves
-# there. Only names that exist in NEITHER schema-qualified place — in
-# practice, the extension's `vector` type — fall through to `public`.
-# It is also how a real deployment is arranged: extensions in `public`,
-# on the path, with the application's own tables wherever they live.
+# THIS NO LONGER DETERMINES WHERE TABLES LIVE. On 2026-08-27, exactly
+# this search path — combined with `create_all(checkfirst=True)` on a
+# session where `public` already held every table (the dev database) —
+# caused table creation to be silently skipped in TEST_SCHEMA, which
+# left `_clean_tables`' unqualified TRUNCATE below with nothing to
+# resolve to except `public`, and it wiped the real development data.
+# The fix is not a different search path — it's that table CREATION
+# (via `schema_translate_map`, see `_isolated_test_schema`) and table
+# CLEANUP (via literal `TEST_SCHEMA.<table>` names, see `_clean_tables`)
+# no longer consult this value at all. It is kept, deliberately narrowed
+# to "the extension type's schema", not "where things resolve".
 _SEARCH_PATH_CONNECT_ARGS = {"server_settings": {"search_path": f"{TEST_SCHEMA},public"}}
+
+# The complete set of tables `_clean_tables` truncates before every
+# test. A single tuple, not a list duplicated into both the safety
+# assertion and the TRUNCATE statement, so the two can never drift out
+# of step with each other.
+_MANAGED_TABLES = (
+    "refresh_tokens",
+    "users",
+    "profiles",
+    "skills",
+    "profile_target_roles",
+    "profile_target_skills",
+    "resumes",
+    "skill_aliases",
+    "skill_relations",
+    "candidate_skills",
+    "skill_evidence",
+    "github_connections",
+    "github_repositories",
+    "github_repository_languages",
+    "github_repository_topics",
+    "github_ingestion_runs",
+    "candidate_qualifications",
+    "job_eligibility_requirements",
+    "job_eligibility_requirement_values",
+    "embeddings",
+)
+
+
+async def _assert_isolated_before_destructive_operation(conn: AsyncConnection) -> None:
+    """Refuse to proceed unless every managed table demonstrably lives in
+    `TEST_SCHEMA` — called immediately before `_clean_tables`' TRUNCATE,
+    and right after `_isolated_test_schema` creates the tables, so a
+    broken setup is caught at session start rather than on first use.
+
+    DELIBERATELY NOT A `search_path` CHECK. `to_regclass()` given a
+    dot-qualified name (`'careerlens_test.users'`) resolves ONLY that
+    literal schema — per the PostgreSQL documentation, a schema-qualified
+    name bypasses `search_path` entirely — so a pass here is not "the
+    search path currently happens to point the right way", it is "this
+    exact relation exists in this exact schema", independent of any
+    connection setting. That is what makes this assertion a genuine
+    second, independent proof, not a restatement of the same mechanism
+    that failed on 2026-08-27.
+    """
+    assert TEST_SCHEMA == "careerlens_test", (
+        f"refusing to touch test data: TEST_SCHEMA is {TEST_SCHEMA!r}, not the "
+        "expected 'careerlens_test' — every safety check in this file assumes "
+        "this constant names the isolated schema, so a change here must not "
+        "pass silently"
+    )
+
+    missing = (
+        await conn.scalars(
+            # CAST(:names AS text[]) — not left to asyncpg to infer: an
+            # untyped array parameter makes `unnest` ambiguous (it is
+            # overloaded for every array element type), which fails
+            # outright rather than silently picking the wrong one. Note
+            # this is NOT written as `:names::text[]` — text()'s own
+            # bind-parameter parser treats a colon immediately following
+            # a parameter name as the START of a second parameter, not a
+            # cast, so that spelling fails to bind at all.
+            text(
+                "select t.table_name "
+                "from unnest(CAST(:names AS text[])) as t(table_name) "
+                "where to_regclass(:schema || '.' || t.table_name) is null"
+            ).bindparams(names=list(_MANAGED_TABLES), schema=TEST_SCHEMA)
+        )
+    ).all()
+    if missing:
+        raise AssertionError(
+            f"refusing to run test cleanup: {sorted(missing)} do not exist in "
+            f"schema {TEST_SCHEMA!r}. Test cleanup must NEVER fall through to "
+            "another schema — this is exactly how the 2026-08-27 incident "
+            "wiped the development database. Fix the isolated schema; do not "
+            "relax this check."
+        )
 
 
 # Test engines use NullPool (see the calls below).
@@ -131,16 +211,26 @@ def _isolated_test_schema() -> Generator[None, None, None]:
                 # for tests. Migration correctness itself is verified
                 # separately, by actually running `alembic upgrade head`.
                 #
-                # checkfirst=False is REQUIRED, not an optimisation.
-                # `public` trails TEST_SCHEMA on the search path (see
-                # above), and the default checkfirst=True resolves "does
-                # this table exist?" through that path — so it would find
-                # the DEV schema's `users`, `skills` and the rest, decide
-                # they already exist, and create nothing in TEST_SCHEMA.
-                # Every test would then silently read and write the dev
-                # database. Creating unconditionally into a schema we
-                # just made empty is what keeps the isolation real.
-                await conn.run_sync(Base.metadata.create_all, checkfirst=False)
+                # schema_translate_map={None: TEST_SCHEMA} is what places
+                # every table (none of our models set an explicit
+                # `schema=`) into TEST_SCHEMA — an execution-time DDL
+                # rewrite, NOT a search_path lookup, so it is unaffected
+                # by whatever `search_path` this connection carries.
+                # `checkfirst=False` remains required alongside it: with
+                # `public` still on the search path for the `vector`
+                # type (see `_SEARCH_PATH_CONNECT_ARGS`), the default
+                # checkfirst=True would still ask "does this table exist
+                # ANYWHERE on the path" — find it in the dev schema `public`
+                # — and skip creating it here, leaving TEST_SCHEMA empty
+                # exactly as it did in the 2026-08-27 incident. Creating
+                # unconditionally into a schema we just made empty is
+                # what keeps the isolation real regardless of search_path.
+                qualified = await conn.execution_options(schema_translate_map={None: TEST_SCHEMA})
+                await qualified.run_sync(Base.metadata.create_all, checkfirst=False)
+                # Verify setup succeeded before any test runs, rather
+                # than discovering a broken schema only when the first
+                # test's cleanup assertion fails.
+                await _assert_isolated_before_destructive_operation(qualified)
         finally:
             await engine.dispose()
 
@@ -157,35 +247,46 @@ def _isolated_test_schema() -> Generator[None, None, None]:
     asyncio.run(_drop())
 
 
+async def truncate_managed_tables() -> None:
+    """Truncate every table in `_MANAGED_TABLES`, scoped to `TEST_SCHEMA`.
+
+    Module-level (not nested inside the `_clean_tables` fixture below)
+    so that tests/test_schema_safety.py can call the EXACT same cleanup
+    path the fixture uses on every test, rather than a copy of it that
+    could drift out of sync and stop proving anything.
+    """
+    engine = create_async_engine(
+        get_settings().database_url,
+        connect_args=_SEARCH_PATH_CONNECT_ARGS,
+        poolclass=NullPool,
+    )
+    try:
+        async with engine.begin() as conn:
+            # The safety assertion runs INSIDE the same transaction as
+            # the TRUNCATE it guards, immediately before it — not
+            # earlier, and not on a different connection — so there is
+            # no window between "verified safe" and "destructive
+            # statement runs" for anything to change in between.
+            await _assert_isolated_before_destructive_operation(conn)
+
+            # Every table name is schema-qualified (`TEST_SCHEMA.<table>`),
+            # generated from the single `_MANAGED_TABLES` tuple. This is
+            # what actually prevents a repeat of the 2026-08-27 incident:
+            # an unqualified TRUNCATE resolves through search_path and
+            # can silently land somewhere else if that path is ever
+            # misconfigured (which is exactly what happened); a
+            # schema-qualified one names its target outright and fails
+            # loudly rather than falling through to `public` if
+            # `TEST_SCHEMA.<table>` does not exist.
+            qualified_tables = ", ".join(f"{TEST_SCHEMA}.{table}" for table in _MANAGED_TABLES)
+            await conn.execute(text(f"TRUNCATE {qualified_tables} RESTART IDENTITY CASCADE"))
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _clean_tables() -> None:
     """Truncate product tables before each test, so tests never see
     leftover rows from a previous test. A no-op for test files that
     don't touch the database."""
-    settings = get_settings()
-
-    async def _truncate() -> None:
-        engine = create_async_engine(
-            settings.database_url,
-            connect_args=_SEARCH_PATH_CONNECT_ARGS,
-            poolclass=NullPool,
-        )
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(
-                    text(
-                        "TRUNCATE refresh_tokens, users, profiles, skills, "
-                        "profile_target_roles, profile_target_skills, resumes, "
-                        "skill_aliases, skill_relations, candidate_skills, "
-                        "skill_evidence, github_connections, github_repositories, "
-                        "github_repository_languages, github_repository_topics, "
-                        "github_ingestion_runs, candidate_qualifications, "
-                        "job_eligibility_requirements, job_eligibility_requirement_values, "
-                        "embeddings "
-                        "RESTART IDENTITY CASCADE"
-                    )
-                )
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_truncate())
+    asyncio.run(truncate_managed_tables())
