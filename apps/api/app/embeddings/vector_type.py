@@ -29,11 +29,13 @@ it — see the note there.
 """
 
 import struct
+import typing
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import Dialect, cast
+from sqlalchemy import Dialect, Float, cast
 from sqlalchemy.sql.elements import BindParameter, ColumnElement
+from sqlalchemy.sql.operators import custom_op
 from sqlalchemy.types import UserDefinedType
 
 
@@ -58,6 +60,34 @@ class Vector(UserDefinedType[list[float]]):
     """
 
     cache_ok = True
+
+    class comparator_factory(UserDefinedType.Comparator[list[float]]):  # noqa: N801
+        """The distance operators pgvector defines on `vector`.
+
+        Only cosine is exposed, because it is the only one this project
+        uses (app/embeddings/retrieval.py) and because the provider
+        returns L2-normalised vectors, for which cosine is the natural
+        measure. `<->` (L2) and `<#>` (negative inner product) are
+        deliberately absent rather than added speculatively — adding an
+        operator nothing calls invites picking the wrong one later.
+        """
+
+        def cosine_distance(self, other: list[float]) -> ColumnElement[float]:
+            """`self <=> other` — a DISTANCE, so smaller is nearer.
+
+            Returns 0.0 for identical direction and 2.0 for opposite.
+            Callers wanting a similarity want `1 - distance`; see
+            app/embeddings/retrieval.py, which does that conversion once.
+            """
+            # typing.cast, not sqlalchemy.cast: `Comparator.operate` is
+            # declared to return ColumnElement[list[float]] (the column's
+            # own type), but `<=>` yields a scalar distance and
+            # `return_type=Float()` is what the SQL layer actually uses.
+            # This corrects the static type to match; it emits nothing.
+            return typing.cast(
+                "ColumnElement[float]",
+                self.operate(custom_op("<=>", return_type=Float()), other),
+            )
 
     def __init__(self, dim: int) -> None:
         if dim <= 0:

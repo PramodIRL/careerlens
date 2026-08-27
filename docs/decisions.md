@@ -15,6 +15,83 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Ship Prompt 5.2 as retrieval infrastructure only (5.2a).
+  No `semantic_fit_v1` score component, no UI, and no change to
+  `overall_score`.
+- **Problem**: 5.2 asks for a user-visible semantic-fit score, but the
+  only embedding provider is the deterministic mock, whose vectors carry
+  no semantic structure. Measured on 5.2's own motivating example:
+  "Experience with container orchestration" scores **-0.0372** against
+  "Built Kubernetes-based microservices" and **-0.0064** against "Wrote
+  marketing copy for a bakery newsletter" — the *unrelated* text ranks
+  higher. Over 300 arbitrary pairs the distribution is mean -0.0018 /
+  stdev 0.0536, against 0.0510 expected for uniformly random unit
+  vectors in R^384. Only exact-text matches rise above the noise.
+- **Alternatives**: (1) implement the score behind a disabled flag;
+  (2) implement it and display it with mock vectors; (3) adopt a real
+  provider first.
+- **Trade-off**: The retrieval plumbing is genuinely testable today
+  (operator direction, ownership, model filtering, ordering, N+1), so
+  building it is not wasted. Displaying a score derived from that
+  distribution would put a number on screen that is noise, which
+  contradicts docs/project-brief.md's rule that "a score must be
+  derived from stored, inspectable signals". Option (2) was rejected on
+  exactly that ground; (1) was rejected as code that cannot be
+  meaningfully tested and invites being switched on prematurely.
+- **Outcome**: 5.2a delivers retrieval and a backfill writer. The score
+  component and its UI wait for a real provider.
+
+- **Date**: 2026-08-27
+- **Decision**: Add a `cosine_distance` comparator to the existing
+  custom `Vector` type rather than adopting the `pgvector` Python
+  package, despite the 5.1 decision anticipating adoption "in the slice
+  that actually runs a similarity query".
+- **Problem**: Retrieval needs the `<=>` operator, which the custom type
+  did not expose.
+- **Alternatives**: Add `pgvector>=0.5` and use its `Vector` type and
+  operators, as the earlier entry expected.
+- **Trade-off**: The comparator is ~12 lines against a new dependency,
+  and only cosine is exposed — `<->` and `<#>` are deliberately absent
+  rather than added speculatively, since an unused operator is one a
+  future reader might pick by mistake. The earlier decision is not
+  overturned so much as deferred again: the swap remains an import
+  change, and the emitted SQL is identical either way. Verified against
+  PostgreSQL: identical vectors give distance 0.0, orthogonal 1.0,
+  opposite 2.0.
+- **Outcome**: Custom comparator; the `pgvector` package stays unadopted
+  while the only operator in use is one line of SQL.
+
+- **Date**: 2026-08-27
+- **Decision**: Choose NO default similarity threshold.
+  `find_similar(min_similarity=...)` defaults to `None`.
+- **Problem**: A retrieval API usually wants a relevance cutoff.
+- **Alternatives**: Pick a conventional value (0.7, 0.75) as a default.
+- **Trade-off**: Callers get unfiltered results and must decide for
+  themselves, which is less convenient. But there is nothing to
+  calibrate a cutoff against: against the mock's distribution (above)
+  any threshold either admits everything or nothing, and a constant
+  copied from a blog post about a different model would be numerology
+  presented as a tuned parameter.
+- **Outcome**: No default. The parameter exists and is honoured when
+  supplied; a default arrives with the provider that can justify one.
+
+- **Date**: 2026-08-27
+- **Decision**: Persist nothing from retrieval — no similarity table, no
+  cached hit rows, no migration in 5.2a.
+- **Problem**: Storing retrieved evidence and its similarity would let a
+  response be reproduced later without re-running the query.
+- **Alternatives**: A `semantic_retrieval_results` table keyed by (job,
+  user, model).
+- **Trade-off**: Every read re-runs the vector query. In exchange there
+  is no staleness problem: a stored similarity is invalidated by new
+  evidence, an edited job description, a re-run backfill or a model
+  change, and several of those fire from workers outside any request —
+  the same reasoning `read_saved_job_gaps` already records for not
+  storing gap rows. Nothing is derived that cannot be recomputed from
+  the embeddings that are stored.
+- **Outcome**: Derived on read. No schema change in this slice.
+
+- **Date**: 2026-08-27
 - **Decision**: Fix ONE embedding dimension for the project — **384** —
   as a schema constant (`app/models/embedding.py`'s
   `EMBEDDING_DIMENSION`, and the literal `vector(384)` in migration

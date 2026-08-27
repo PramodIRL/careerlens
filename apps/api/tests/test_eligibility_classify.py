@@ -217,6 +217,41 @@ def test_a_year_with_no_graduation_context_is_ignored() -> None:
     assert _by_type("Founded in 2011, we serve millions.") == {}
 
 
+def test_or_later_is_a_floor_not_an_equality() -> None:
+    """The reported bug: "2024 or later" was stored as `eq 2024`, so a
+    candidate graduating in 2027 was reported NOT ELIGIBLE."""
+    parsed = _by_type("Graduation year 2024 or later.")[T.GRADUATION_YEAR.value]
+    assert parsed.comparator is Comparator.GTE
+    assert parsed.numeric_value == Decimal("2024")
+
+
+def test_or_earlier_is_a_ceiling() -> None:
+    parsed = _by_type("Graduation year 2024 or earlier.")[T.GRADUATION_YEAR.value]
+    assert parsed.comparator is Comparator.LTE
+    assert parsed.numeric_value == Decimal("2024")
+
+
+def test_an_alternate_inclusive_phrasing_is_also_a_floor() -> None:
+    """The cue vocabulary is a list, so at least one member beyond the
+    two headline phrasings needs to be pinned down."""
+    parsed = _by_type("Must graduate in 2022 or after.")[T.GRADUATION_YEAR.value]
+    assert parsed.comparator is Comparator.GTE
+    assert parsed.numeric_value == Decimal("2022")
+
+
+def test_a_bare_year_stays_an_equality() -> None:
+    """Guards the fix against over-reaching: a clause naming one year
+    with no direction cue IS an exact batch requirement."""
+    parsed = _by_type("Graduation year 2024.")[T.GRADUATION_YEAR.value]
+    assert parsed.comparator is Comparator.EQ
+    assert parsed.numeric_value == Decimal("2024")
+
+
+def test_a_negated_graduation_clause_still_produces_nothing() -> None:
+    """Direction cues must not resurrect a clause negation suppresses."""
+    assert _by_type("No specific graduation year, 2024 or later or otherwise.") == {}
+
+
 # --- negation and levels ------------------------------------------------
 
 

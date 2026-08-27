@@ -90,6 +90,34 @@ _PREFERRED_CUES: tuple[str, ...] = (
 # holds a perfectly good CGPA match. A negated clause yields no row —
 # not a relaxed one — because "we do not screen on CGPA" is the absence
 # of a bar, not a bar at zero.
+# Direction cues for a graduation-year clause: "2024 or later" is a
+# FLOOR, "2024 or earlier" a CEILING, and a bare "2024" a specific batch.
+# Without these every phrasing collapsed to `eq`, so only a candidate
+# whose year exactly equalled the bar could ever satisfy the
+# requirement — "2024 or later" rejected 2027.
+#
+# INCLUSIVE PHRASINGS ONLY. "or later" means >= 2024, and every cue here
+# has that same "this year counts too" sense. Bare exclusive forms
+# ("before 2024", "after 2024") mean strictly < and >, which `Comparator`
+# cannot express — mapping them onto lte/gte would shift a real
+# eligibility decision by one year, so they are deliberately left
+# unhandled and keep falling through to `eq`.
+_YEAR_FLOOR_CUES: tuple[str, ...] = (
+    "or later",
+    "or after",
+    "and later",
+    "onwards",
+    "onward",
+    "or above",
+)
+
+_YEAR_CEILING_CUES: tuple[str, ...] = (
+    "or earlier",
+    "or before",
+    "and earlier",
+    "or prior",
+)
+
 _NEGATION_PHRASES: tuple[str, ...] = (
     "no minimum",
     "no specific",
@@ -251,6 +279,21 @@ def _is_negated(window: str) -> bool:
 
 def _level_for(window: str) -> str:
     return LEVEL_PREFERRED if any(cue in window for cue in _PREFERRED_CUES) else LEVEL_REQUIRED
+
+
+def _year_direction(window: str) -> Comparator:
+    """Which way a single graduation year is open, from its clause.
+
+    `EQ` is the default rather than a guess: a clause naming one year
+    with no direction cue ("Graduation year 2024.") IS an exact batch
+    requirement, so falling through to equality is correct behaviour and
+    not a fallback.
+    """
+    if any(cue in window for cue in _YEAR_FLOOR_CUES):
+        return Comparator.GTE
+    if any(cue in window for cue in _YEAR_CEILING_CUES):
+        return Comparator.LTE
+    return Comparator.EQ
 
 
 def _decimal(raw: str) -> Decimal:
@@ -462,7 +505,10 @@ def _parse_graduation_year(text: str) -> list[ParsedRequirement]:
         found.append(
             ParsedRequirement(
                 requirement_type=EligibilityRequirementType.GRADUATION_YEAR,
-                comparator=Comparator.EQ,
+                # Read from the clause, not assumed: "2024 or later" is a
+                # floor and "2024 or earlier" a ceiling. `window` is the
+                # casefolded clause already used for negation and level.
+                comparator=_year_direction(window),
                 numeric_value=_decimal(years[0].group(1)),
                 requirement_level=level,
                 matched_term=years[0].group(0),

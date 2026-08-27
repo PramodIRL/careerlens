@@ -230,6 +230,21 @@ def test_an_exact_year_requirement_compares_for_equality() -> None:
     )
 
 
+def test_a_graduation_year_floor_admits_a_later_year() -> None:
+    """The end of the reported bug: "Graduation year 2024 or later" now
+    classifies as `gte`, and a candidate graduating in 2027 is ELIGIBLE.
+    The resolver was always correct — this pins down the pairing."""
+    requirement = _req(T.GRADUATION_YEAR, Comparator.GTE, value=Decimal("2024"))
+    assert (
+        resolve_requirement(requirement, CandidateFact(value_numeric=Decimal("2027"))).state
+        is EligibilityState.SATISFIED
+    )
+    assert (
+        resolve_requirement(requirement, CandidateFact(value_numeric=Decimal("2023"))).state
+        is EligibilityState.NOT_SATISFIED
+    )
+
+
 def test_an_unrecognised_comparator_is_undetermined_not_an_error() -> None:
     """The vocabulary is stored as plain text so it can grow. A row
     written by a newer version must not 500 this endpoint."""
