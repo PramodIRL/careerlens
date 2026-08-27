@@ -338,6 +338,76 @@ later semantic-retrieval slice needs.
 cd apps/api && uv run pytest tests/test_embeddings.py tests/test_embedding_store.py
 ```
 
+## Retrieval evaluation and regression policy
+
+Semantic retrieval is graded against a **developer-authored synthetic
+benchmark** (12 cases, 56 items). It catches direction-of-travel
+regressions; it is **not** real-world hiring validation — see
+`apps/api/app/evaluation/dataset.py`.
+
+```bash
+make evaluate-retrieval   # print the full report
+make evaluate-check       # compare against the baseline; exits 1 on regression
+make evaluate-baseline    # re-baseline an intentional change
+```
+
+`apps/api/app/evaluation/baseline.json` is the checked-in reference. It
+records the model, the dataset fingerprint, the `semantic_fit_v1`
+constants, every metric, and per-case NDCG@5.
+
+### When a change must be rejected
+
+| Rule | Outcome |
+|---|---|
+| P@K, R@K or NDCG@K drops more than **0.02** | reject |
+| Coverage drops at all | reject |
+| Duplicate crowding rises more than **2** slots | warning only |
+| Any metric improves | never fails |
+
+0.02 is roughly one case of twelve degrading. For scale, the gap between
+the measured system and a random ranker is 0.18 at NDCG@5.
+
+### What CI enforces, and what it cannot
+
+CI has no model weights, so it runs only the model-independent checks
+(`tests/test_evaluation_policy.py`): the baseline's dataset fingerprint,
+model identifier and FLOOR/CEIL/TOP_K must match the code. That catches
+an edited benchmark, a swapped provider or a changed threshold that was
+not re-baselined.
+
+**It does not validate a ranking change.** Editing
+`apps/api/app/embeddings/retrieval.py` moves results without moving any
+fingerprint, so CI stays green while saying nothing about it. Run
+`make evaluate-check` locally before merging such a change — a green
+tick is not evidence there.
+
+Changes that should trigger a local evaluation: the embedding
+provider/model, `retrieval.py`, `semantic_fit.py` constants, anything
+under `app/evaluation/`. Taxonomy and skill-matching changes are
+advisory — they alter which evidence exists, not how it is ranked.
+
+### Adding a benchmark case
+
+Edit `apps/api/app/evaluation/dataset.py`, label each item
+(`relevant_paraphrase`, `relevant_lexical`, `lexical_distractor`,
+`unrelated`), bump `DATASET_VERSION`, then `make evaluate-baseline`.
+Every case needs both relevant and irrelevant evidence, or it cannot
+distinguish a working ranker from one that returns everything.
+
+### Diagnosing a regression
+
+The failure names the metric, both values and the delta, then lists the
+worst-affected cases by per-case NDCG@5. Run `make evaluate-retrieval`
+to see the full ranking and the per-label similarity distributions
+behind them.
+
+### Approving an intentional change
+
+Re-baseline in the **same PR** as the change that caused the movement,
+so a reviewer sees the cause and the metric shift in one diff. **Never
+commit a standalone baseline update** — it is indistinguishable from
+silently accepting a regression.
+
 ## Migrations
 
 Schema changes are tracked with [Alembic](https://alembic.sqlalchemy.org/).
