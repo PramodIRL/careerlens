@@ -33,6 +33,17 @@ MAX_OUTCOME_CHARS = 300
 MAX_CRITERIA_CHARS = 300
 MAX_FOCUS_CHARS = 120
 MAX_CHECKPOINT_CHARS = 300
+# One step is a few days of work, so its prose is one or two sentences.
+# Shorter than an item's, deliberately: a step that needs a paragraph is
+# a step doing the item's job.
+MAX_STEP_TASK_CHARS = 280
+MAX_STEP_DONE_CHARS = 200
+# A plan holds at most MAX_ITEMS items, each with at most
+# MAX_STEPS_PER_ITEM steps — but the day arithmetic bounds it far below
+# that product, because steps are carved out of a window of at most 56
+# days. This is the ceiling the response schema declares; a test pins
+# that the scheduler cannot reach it.
+MAX_STEPS = 32
 MAX_RESPONSE_BYTES = 32_000
 
 # Weeks are derived from the declared duration, so the ceiling follows
@@ -83,6 +94,33 @@ class RoadmapEvidenceFact(BaseModel):
     excerpt: str | None = None
 
 
+class RoadmapStepFact(BaseModel):
+    """One block of days inside an item, and its learning MODE.
+
+    EVERYTHING HERE IS DECIDED. The days come from
+    `roadmap_schedule_v2`, the phase from the deterministic ladder in
+    app/roadmap/priority.py. The model writes what to actually DO in
+    these days — which concepts, which exercise, which build — and can
+    move nothing.
+
+    THE PHASE IS A BOUNDARY, NOT A LESSON PLAN. "practice" says this
+    block is for practising; it does not say on what. That choice is
+    the mentoring value the model adds, and constraining it further
+    would be CareerLens pretending to a pedagogy it has not earned.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str
+    # "learn" | "practice" | "build" | "prove" | "self_check"
+    # | "demonstrate" | "document"
+    phase: str
+    start_day: int
+    end_day: int
+    week: int
+    estimated_hours: float = 0.0
+
+
 class RoadmapItemFact(BaseModel):
     """One decided roadmap item the model writes prose for.
 
@@ -99,7 +137,7 @@ class RoadmapItemFact(BaseModel):
     # "missing_required" | "missing_preferred" | "weak_evidence"
     state: str
     # Real days in the candidate's declared window, 1-based inclusive,
-    # decided by `roadmap_schedule_v1`. The model is told when the work
+    # decided by `roadmap_schedule_v2`. The model is told when the work
     # happens; it does not get to move it.
     start_day: int
     end_day: int
@@ -114,6 +152,9 @@ class RoadmapItemFact(BaseModel):
     # An ESTIMATE derived from the hours the user declared, divided
     # across the items that fit. Never presented as a measurement.
     estimated_hours: float = 0.0
+    # The day-level decomposition. Sums to this item's own span, so a
+    # model reading the facts cannot infer any time it does not have.
+    steps: list[RoadmapStepFact] = []
 
 
 class RoadmapPlanFacts(BaseModel):
@@ -129,6 +170,22 @@ class RoadmapPlanFacts(BaseModel):
     total_hours: float
     # Derived from the duration, not a fixed four.
     weeks: int
+    # The weeks that actually HOLD WORK, which is not the same thing.
+    # A 28-day plan spans four weeks; before 6.4b two items scheduled
+    # across it registered in weeks 1 and 3 only, so a model told
+    # "weeks: 4" themed all four and was rejected for naming weeks the
+    # schedule never used. Weeks are now derived from STEPS, which never
+    # straddle a boundary, so this list is the weeks a candidate really
+    # has work in. `_check_weeks` still verifies it independently.
+    work_weeks: list[int] = []
+    # How many of the declared days the plan actually fills, and how
+    # many it does not. An honest deterministic fact: when the
+    # candidate's saved jobs do not justify the window they asked for,
+    # the remainder is reported rather than padded with invented work.
+    scheduled_days: int = 0
+    unscheduled_days: int = 0
+    # "full" | "partial"
+    coverage: str = "full"
 
 
 class RoadmapFacts(BaseModel):
@@ -149,14 +206,23 @@ class RoadmapFacts(BaseModel):
     def item_ids(self) -> set[str]:
         return {item.item_id for item in self.items}
 
+    def step_ids(self) -> set[str]:
+        return {step.step_id for item in self.items for step in item.steps}
+
     def week_numbers(self) -> set[int]:
         """Every week that actually holds work.
 
-        A week with no item starting in it gets no narrative entry —
-        asking a model to theme an empty week invites it to invent
-        something to put there.
+        FROM STEPS, NOT FROM ITEM START DAYS (Prompt 6.4b). An item
+        running days 1-14 is work in weeks 1 AND 2; keying off its start
+        day filed it under week 1 alone and left week 2 rendering
+        "nothing scheduled" while the candidate was meant to be working.
+        Steps never straddle a boundary, so this is exact.
+
+        A week with no step in it still gets no narrative entry — asking
+        a model to theme an empty week invites it to invent something to
+        put there.
         """
-        return {item.week for item in self.items}
+        return {step.week for item in self.items for step in item.steps}
 
     def job_ids(self) -> set[uuid.UUID]:
         return {job.saved_job_id for job in self.jobs}
@@ -193,6 +259,27 @@ class NarrativeItem(BaseModel):
     success_criteria: str = Field(min_length=1, max_length=MAX_CRITERIA_CHARS)
 
 
+class NarrativeStep(BaseModel):
+    """The model's contribution for ONE already-decided block of days.
+
+    No phase, no days, no hours, no ordering — those are decided, and a
+    field for them would be a field to disagree through. What IS the
+    model's: which concepts this block covers, which exercise, what gets
+    built. That is the mentoring judgement the deterministic layer has
+    no basis to make.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str
+    # WHAT TO DO IN THESE DAYS. Specific enough to start this morning:
+    # the sub-topics by name, and the thing they are practised on.
+    task: str = Field(min_length=1, max_length=MAX_STEP_TASK_CHARS)
+    # THE FINISH LINE FOR THIS BLOCK — observable, so "am I on track"
+    # has an answer before the item is over.
+    done_when: str = Field(min_length=1, max_length=MAX_STEP_DONE_CHARS)
+
+
 class NarrativeWeek(BaseModel):
     """A theme and a checkpoint for one week.
 
@@ -223,3 +310,4 @@ class RoadmapNarrative(BaseModel):
     overview: str = Field(min_length=1, max_length=MAX_OVERVIEW_CHARS)
     weeks: list[NarrativeWeek] = Field(default=[], max_length=MAX_WEEKS)
     items: list[NarrativeItem] = Field(default=[], max_length=16)
+    steps: list[NarrativeStep] = Field(default=[], max_length=MAX_STEPS)

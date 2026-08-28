@@ -15,6 +15,219 @@ Add one entry per decision, most recent first.
 ---
 
 - **Date**: 2026-08-27
+- **Decision**: Fix the four browser-reported rejections by constraining
+  the DECODER further and by making the prompts obey their own rules —
+  not by touching a validator.
+- **What the diagnosis actually found**: not stale state, not duplicate
+  requests, not caching. Neither panel fetches on mount; both LLM calls
+  are click-only. Three of the four failures were caused by MY OWN
+  PROMPT: its worked examples said `EC2`, `502`, `FastAPI`, `Python` and
+  `75`, while the rules above them said "never name a skill outside the
+  facts" and "never write a number that is not in the facts". The model
+  copied the examples verbatim and was rejected for it, deterministically
+  — 3/3 on FastAPI, 3/3 on 502. An example that breaks a rule teaches
+  the rule can be broken. All examples now use `<placeholders>` and a
+  test asserts neither prompt contains a taxonomy name or a figure, so
+  this cannot come back a fourth time.
+- **Weeks**: the facts said `weeks: 4` while only weeks 1 and 3 held
+  work, so the model themed all four and `_check_weeks` refused it every
+  time. `work_weeks` is now stated in the facts and pinned as an enum in
+  the per-request schema.
+- **Duplicate values**: a six-item plan returned weeks `[1, 2, 3, 2]` —
+  every value legal, the array not. An enum constrains each ELEMENT, not
+  the array, so array lengths are now bounded to the number of permitted
+  values; `uniqueItems` is not reliably supported by schema-to-grammar
+  converters.
+- **Where prompt-only was NOT enough**: "a skill with no evidence cannot
+  be a strength" was written into the style section and then into the
+  RULES block, and qwen2.5:7b wrote an uncited strength anyway, 4 times
+  out of 4 — "you matched Python" is in the facts and writing about it
+  is the obvious thing to do. With no citable evidence the only valid
+  answer is an empty list, so the schema now says so. Worth recording as
+  a general lesson: at this model size, a rule the SCHEMA can express
+  should not be left to prose.
+- **The semantic mismatch, unresolved on purpose**: a user-confirmed
+  skill satisfies a requirement with NO evidence
+  (app/matching/resolve.py: "Satisfies the requirement even with no
+  evidence rows left"), while the explanation's grounding policy
+  requires an evidence row before that skill may be a strength. By the
+  product's own definition such a skill IS grounded — by the candidate's
+  own assertion — so the citation rule is stricter than the rest of the
+  system. The cost is real: those matches now reach the reader only
+  through the summary, never as a strength. Changing it is a grounding
+  policy decision and is deliberately NOT made in this slice.
+- **Measured after the fixes** (small samples of a nondeterministic
+  system — temperature 0.3, no fixed seed): explanation 16/16 across
+  four fact shapes that previously failed 0/4; roadmap 9/9 across 2, 4
+  and 6 items. No validator was loosened, and every rule still has an
+  independent test asserting it still rejects what it always rejected.
+
+- **Date**: 2026-08-27
+- **Decision**: Fix three false positives that browser-testing the real
+  model exposed — numeric token boundaries, case-sensitive skill
+  matching, and per-request allowlists in the prompt — and forbid the
+  model from advising a candidate to claim a skill they have not earned.
+- **Problem**: Every failure came from the mock never behaving like a
+  model. Templated prose does not write "EC2", does not say "go
+  deeper", and does not suggest updating a resume. A real model does all
+  three on its first run.
+- **Numeric boundaries**: `\d+` with no lookarounds pulled "2" out of
+  `EC2`, "3" out of `S3` and "8" out of `K8s`, so any cloud roadmap was
+  rejected for stating a number nobody supplied. The rule's intent is
+  "do not assert a quantity we did not give you"; a digit inside an
+  identifier asserts nothing. `(?<![0-9A-Za-z])...(?![0-9A-Za-z])` —
+  the boundary style `_check_skills` already used. Standalone numerals
+  ("5 of your jobs", "90%") are checked exactly as before. Worth naming:
+  the roadmap prompt's own "better" example was `"Cover EC2, IAM roles
+  and security groups"`, so the instruction was telling the model to
+  produce the string the validator rejected.
+- **Case-sensitive skills**: the roadmap validator lowercased both
+  sides, so `\bgo\b` matched the verb "go", `\breact\b` matched "react to
+  feedback" and `\bagile\b` matched "an agile approach". It now matches
+  case-sensitively like the explanation validator. Skill names are
+  proper nouns; matching them as such is more accurate, not more
+  permissive — and it stops two validators disagreeing about one rule,
+  which is what app/matching/resolve.py exists to prevent.
+- **Per-request allowlists**: "do not name a skill that is not present"
+  asked the model to infer an allowlist from a JSON document. The
+  instruction now names it, along with the permitted numerals. The
+  numbers come from the validator's own `allowed_numbers()`, so the list
+  the model is given and the list it is judged against are the same
+  object — two hand-maintained copies would drift, and the failure mode
+  of that drift is every answer being rejected. Skill names come from
+  the curated taxonomy and numbers are computed, so neither is
+  third-party text and both are safe in the instruction; the untrusted
+  excerpts stay in the data block.
+- **The honesty rule, which no validator will ever enforce**: the model
+  produced "Consider adding AWS and Kubernetes to your tech stack and
+  resume" for skills the candidate does not have. That is perfectly
+  grounded — every name was in the facts — and it is advice to
+  misrepresent yourself. It was the only one of the three failures that
+  PASSED validation, and the only one that could harm a user. Both
+  prompts now reverse the direction: build the capability, get real
+  project experience, and the evidence follows. Detecting this
+  mechanically would mean regex over prose, which would both miss real
+  cases and reject honest phrasings — and a fail-closed grounding rule
+  that fires on a false positive costs a user their explanation. So it
+  lives in the prompt, asserted by a live smoke test that gates nothing.
+- **Two residuals, deliberately fail-closed and pinned by tests**: a
+  sentence STARTING with "React" or "Express" is capitalised and
+  indistinguishable from the library without parsing English, so it is
+  still rejected; and `HTTP/2` still yields "2", because widening the
+  boundary to cover "/" would also admit "3/5 jobs", which IS a quantity
+  claim. Both cost prose and neither touches the deterministic result.
+- **Outcome**: 24 focused regression tests, each from an observed
+  failure, asserting both what the checks must now accept and what they
+  must still reject — in one file, so the two cannot drift. Grounding
+  was not loosened, no schema or API contract changed, and the rejection
+  copy now leads with what works ("your score and gaps are complete")
+  rather than with what failed.
+
+- **Date**: 2026-08-27
+- **Decision**: Pin the LLM's identifier fields to a per-request `enum`
+  built from the deterministic facts, keep the validator's membership
+  check as an independent backstop, and deliberately NOT check semantic
+  relevance of a citation.
+- **Problem**: `{"type": "string", "format": "uuid"}` constrains the
+  SHAPE of an evidence id and not its VALUE, so Ollama's grammar
+  accepted any 32 hex digits. A 7B model transcribing a 36-character
+  opaque token got one wrong and produced a well-formed id that existed
+  nowhere in the facts — rejected as `unknown_evidence_id`. The roadmap
+  had the same flaw and worse: `item_id` was a bare string with no
+  constraint at all.
+- **Trade-off**: Two defences, not one. The enum makes a fabricated id
+  UNREPRESENTABLE at decode time; the validator still verifies
+  membership on the way back and was not loosened. Narrowing what a
+  model CAN say and checking what it DID say are different guarantees,
+  and keeping both is what makes the fix safe rather than a workaround.
+  Zero identifiers become `maxItems: 0` — an empty enum matches nothing
+  and would reject every possible response, including the correct empty
+  array.
+- **The limitation, stated rather than hidden**: a model can still cite
+  a REAL evidence id that does not actually support the claim it is
+  attached to. `_check_citations` verifies membership, not relevance,
+  and that is intentional in this slice: membership is mechanically
+  verifiable and relevance is a judgement, which is exactly the kind of
+  thing a validator should not be asked to make. The UI shows every
+  cited excerpt beside the claim, so a reader can check the fit
+  themselves — the same evidence-first posture the rest of the product
+  takes, where the system shows its working instead of asserting it.
+- **Outcome**: Confined to app/explanation/ollama_provider.py. No
+  validator change, no schema change, no API contract change, no fuzzy
+  matching and no id remapping. Also closed a hole found while testing:
+  `EXPLANATION_PROVIDER=ollama` in .env pointed the whole test suite at
+  the live daemon, so conftest now pins every test to the mock —
+  "offline by default" was true of the default and not of the
+  environment.
+
+- **Date**: 2026-08-27
+- **Decision**: Run the mentor model LOCALLY via an Ollama daemon
+  (`qwen2.5:7b-instruct`), talked to with the `httpx` already in the
+  tree. No hosted provider, no API key, no per-request cost.
+- **Problem**: The explanation and roadmap features shipped with a
+  templated mock. A hosted frontier model would have been the obvious
+  upgrade, but it makes a user's use of this product cost somebody
+  money per request — which is a product decision, not an
+  implementation detail, and the wrong one here.
+- **Alternatives**: (1) a paid hosted API; (2) a free hosted tier;
+  (3) in-process inference via `llama-cpp-python`; (4) browser-side
+  inference (WebLLM).
+- **Why not a free hosted tier** — the reason is architectural, not
+  price. Every free tier meters against the DEVELOPER's single key, so
+  each user's request spends our quota: the design cannot serve two
+  people at once and degrades under exactly the load that would mean it
+  was working. Free tiers also typically retain or train on prompts in
+  ways the paid tier does not, and candidate resume excerpts are
+  involved. Useful for comparing prose quality while tuning; unfit as a
+  dependency.
+- **Why a daemon rather than in-process**: `uvicorn --reload` restarts
+  the API on every file save, and a 5 GB model reloaded per save is not
+  a development environment. The app is also multi-process (API plus a
+  Celery worker), so in-process means one copy of the weights per
+  process on a 16 GB machine.
+- **Trade-off, stated plainly**: a roadmap narrative takes 60-90
+  seconds at 7B on an M2 Pro. That is the honest price of not paying
+  per request. `EXPLANATION_TIMEOUT_SECONDS` moves 10 -> 180 (the old
+  value was calibrated against a mock that returns instantly and would
+  have timed out on essentially every real request — QUIETLY, since the
+  deterministic plan still renders), and `EXPLANATION_MAX_ATTEMPTS`
+  moves 2 -> 1, because retrying a 90-second generation doubles the wait
+  and the dominant local failure ("the daemon is not running") is not
+  fixed by a second attempt. Both are CONFIGURATION:
+  app/explanation/runtime.py is untouched and remains the single
+  timeout/retry authority for both features.
+- **No new dependency**: Ollama's API is a JSON POST and `httpx` has
+  been a runtime dependency since 3.1. An SDK would have been a package
+  to justify, audit and upgrade for no capability.
+- **What makes the latency acceptable**: the model was never on the
+  critical path. With `EXPLANATION_PROVIDER=mock` every score, gap,
+  eligibility verdict and roadmap item still renders — the product
+  loses prose and nothing else. That property was built in 6.1-6.3 and
+  is what makes a slow local model a reasonable choice rather than a
+  reckless one.
+- **Grounding is NOT loosened for a smaller model.** Constrained
+  decoding (the Pydantic schema goes in Ollama's `format` field)
+  guarantees the answer parses and matches the schema; it says nothing
+  about whether it is TRUE. The validators stay the only thing that
+  decides what may be shown, and the real model should be expected to
+  be rejected more often than the mock — the mock was written to pass.
+  That is prompt tuning, not a validator problem.
+- **Privacy**: a strict improvement on the hosted alternative. Nothing
+  leaves the host; excerpts reach a process on localhost and go no
+  further. There is no credential to leak because none exists, and a
+  test asserts no secret-shaped setting was added.
+- **Outcome**: 22 offline tests (transport exercised with
+  `httpx.MockTransport`, as the GitHub client already does) plus a
+  2-test live smoke that SKIPS when the daemon or model is absent —
+  the same convention the embedding tests use. CI unchanged: it never
+  runs Ollama, downloads nothing and needs no secret.
+- **The limitation, stated rather than hidden**: zero inference cost is
+  not zero HOSTING cost. A public deployment needs ~6 GB of RAM for the
+  weights, which rules out free tiers. The demo runs locally, which is
+  better for a viva anyway — offline, no quota, no network at the
+  moment it matters.
+
+- **Date**: 2026-08-27
 - **Decision**: Schedule the roadmap by distributing DAYS
   (`roadmap_schedule_v1`), derive the week count from the declared
   duration, and bound `top_n` by the user's actual saved-job count.
@@ -1639,5 +1852,214 @@ Add one entry per decision, most recent first.
   asserted property rather than a surprise, and
   `test_readme_canonical_match` uses Docker (which has no aliases) for its
   canonical assertion.
+
+- **Date**: 2026-08-27
+- **Decision**: The explanation's summary is TWO fields, and both the gap
+  sentence and the `gaps` list are pinned shut in the decoder when
+  `skill_gap_v1` found no gap.
+- **Problem**: Browser-testing 6.4 on a Frontend Engineer job that scored
+  100% with 7/7 required skills matched and no gaps produced "the main
+  area to improve is REST APIs, as this is a required skill for the
+  role" — about a skill that was MATCHED and only MENTIONED in the
+  posting. Every word was in the allowed skill list and no number was
+  invented, so citations, numbers, skills and links all passed it. Two
+  causes compounded. The instruction block carried a FLAT list of skill
+  names with no status attached, while matched/missing and
+  required/preferred lived only in the nested data — so the most salient
+  view the model had of the skills was one that could not distinguish
+  them. And a summary is "where you stand, then here is the gap": with
+  one free-text field, the second half is always available to be
+  written, and a 7B model filled it from the only list it had been
+  shown.
+- **Alternatives**: More prose in the instruction (tried in 6.4a for the
+  same class of problem, and the reason this entry exists); a validator
+  rule alone; letting the API strip a gap sentence after the fact.
+- **Trade-off**: The internal `MatchExplanation` gained a field, which
+  touched the mock and several fixtures. The wire schema did NOT change:
+  `summary` is now a property that rejoins the halves, so
+  `JobExplanationResponse` and the frontend are untouched. `VerdictFacts`
+  is a COMPUTED field on `ExplanationFacts` rather than a stored one —
+  a caller cannot pass a verdict that disagrees with the skill lists it
+  claims to summarise, which is the exact bug class it exists to catch.
+  The cost is that serialised facts no longer round-trip without
+  dropping the computed key, handled by one `mode="before"` validator.
+- **Outcome**: A fifth validator layer, `_check_consistency`, refuses a
+  matched skill described as missing, a preferred one called required,
+  and any absence claimed on a result with no gap. It is LEXICAL, not
+  semantic, and the module docstring says so: a paraphrase naming no
+  skill is invisible to it. It is scoped to a CLAUSE rather than a
+  sentence, because "you are strong on Python, and the main area to
+  improve is cloud experience" is one sentence containing two
+  independent claims and judging it whole rejects a truthful answer.
+  Pinned by `test_the_observed_sentence_is_now_rejected` and
+  `test_a_truthful_complete_match_still_passes` — the second is the one
+  that matters, since a check this shape fails by being too eager.
+
+- **Date**: 2026-08-27
+- **Decision**: `roadmap_schedule_v2` splits every item into day-level
+  STEPS with a deterministic phase, caps one skill at fourteen days
+  (`MAX_DAYS_PER_ITEM`), and reports the days it cannot fill instead of
+  stretching to cover them.
+- **Problem**: 28 days, two hours a day and five selected jobs rendered
+  as "Week 1: AWS, days 1-14", "Week 2: nothing", "Week 3: Kubernetes,
+  days 15-28", "Week 4: nothing". Two defects, and the first is not what
+  it looked like: the empty weeks were an ATTRIBUTION artifact, because
+  `week` came from `(start_day - 1) // 7 + 1` — an item running days
+  1-14 is work in weeks 1 AND 2 and was filed under the first alone. The
+  candidate was told nothing was scheduled in a week they were meant to
+  be working. The second defect was real: a fourteen-day item carried
+  one task, one outcome and one success criterion, so no prompt change
+  could have produced a day-by-day journey — the schema had nowhere to
+  put one.
+- **Alternatives**: Attributing an item to every week it touches without
+  decomposing it (fixes the empty weeks, leaves one instruction for a
+  fortnight); letting the model choose the step count and days (the
+  decision the deterministic layer exists to keep); keeping the whole
+  window filled by dividing it across however many items survived.
+- **Trade-off**: Spans no longer always sum to `duration_days`, which
+  changed an asserted behaviour — `test_the_plan_covers_the_requested_
+  days_exactly` became `..._the_scheduled_days_exactly`. That is
+  deliberate: four weeks on one skill is the arithmetic running out of
+  material and padding with time, and `coverage`/`unscheduled_days` say
+  so as deterministic facts. The hard constraint is unchanged and still
+  arithmetic rather than a check — steps tile their item, items tile the
+  scheduled days, so total estimated hours cannot exceed
+  `duration_days x hours_per_day`. Steps are split on WEEK BOUNDARIES
+  before length, so no step straddles a week and attribution is exact by
+  construction rather than by a fix. An item is now nested under every
+  week it occupies, carrying only that week's steps, so the response
+  repeats an item — folded in the tests' `_items` helper.
+- **Outcome**: The PHASE LADDER is deterministic and per gap state:
+  missing skills get LEARN/PRACTICE/BUILD/PROVE/SELF-CHECK, weak
+  evidence gets DEMONSTRATE/DOCUMENT/PROVE and never a learning rung, so
+  "ask for evidence, not for learning it again" is enforced in code
+  rather than requested in a prompt. What the model decides is what the
+  work inside a phase actually is — which sub-topics, which exercise,
+  what gets built — which is the judgement CareerLens has no basis to
+  make. `duration_days` now starts at 2: weeks were only ever a
+  presentation grouping, `ceil(duration_days / 7)`, and the seven-day
+  floor was a leftover from laying the plan out in weeks.
+
+- **Date**: 2026-08-27
+- **Decision**: Record that a 7B local model produces a correct and
+  well-sequenced roadmap whose step wording stays moderately generic,
+  and that adding prohibitions to the prompt made it WORSE.
+- **Problem**: The 6.4b live smoke produces real progressions — "Read
+  through AWS services and their integration" then "Practice creating
+  and securing an AWS service" then "Build a basic AWS service" — but
+  not the named sub-topics the instruction asks for ("users, roles,
+  policies"). An attempt to fix it by forbidding "the documentation",
+  "the fundamentals" and "the basics" as objects made every task
+  SHORTER and vaguer: "Learn about AWS services and concepts",
+  "Self-check AWS knowledge".
+- **Alternatives**: A larger local model (rejected — 16 GB of unified
+  memory, and paid inference is out of scope by design); few-shot
+  examples per skill (a syllabus CareerLens has not earned); accepting
+  the regression.
+- **Trade-off**: The prohibition was reverted. A small model answers a
+  longer list of "do not" by saying less, not by saying more — the
+  useful lever is a good example, not another ban. The prose is a
+  mentor's shape with a generalist's detail, which is honest for a local
+  7B and better than the fortnight-long single instruction it replaced.
+- **Outcome**: `test_a_long_plan_becomes_a_day_by_day_journey` asserts
+  the structural properties a mock cannot fake — one entry per decided
+  block of days, every week themed, and no step repeated within an item
+  — and deliberately asserts nothing about prose quality, which is a
+  person's judgement reading the dashboard. Cross-item repetition is
+  allowed one instance: the prompt asks for variety and a 7B model
+  occasionally misses on the last rung, and a flaky smoke test is worse
+  than a stated limit.
+
+- **Date**: 2026-08-28
+- **Decision**: The instruction's worked examples name no requirement
+  category at all, and the per-request RESULT block became one row per
+  skill carrying the exact phrase to use for it.
+- **Problem**: 6.4b fixed the complete match and left the shape next to
+  it broken. Measured over six verdict shapes x five live generations:
+  five rejections, ALL on the shape whose matched skills were preferred
+  and mentioned rather than required, plus 27 sentences asserting a
+  requirement the verdict did not support. The cause was the
+  instruction's own good examples — "both are listed as required", "both
+  of which this posting requires". A 7B model reuses a sentence frame
+  far more readily than it re-reads a table, so it substituted names
+  into a frame with the category welded in, and the frame was false
+  whenever the skills were not required. The bucket-shaped RESULT block
+  did state every category, but reading it meant remembering which of
+  six headings a name had appeared under.
+- **Alternatives**: Adding `ExplanationClaim.skills` — an enum-pinned
+  list of which skills each claim covers — so the validator could attach
+  category checks precisely; tightening the validator alone; softening
+  the validator to accept the frame.
+- **Trade-off**: The schema field was rejected as the largest change for
+  the smallest marginal gain: a per-skill roster plus the distributive
+  rule below covers the observed failures without a new field for the
+  model to fill in or a contract to migrate. Softening was never on the
+  table. Tightening alone would have raised the rejection rate, which is
+  the user-visible complaint, so the prompt and the validator had to
+  move together — the prompt to make the true sentence the easy one, the
+  validator to catch what still slips through.
+- **Outcome**: Measured on the same harness after: rejections 5 -> 2 of
+  30, miscategorisations 27 -> 0. The shape that rejected five times out
+  of five now generates. Two further per-request lines earn their place
+  the same way — "nothing in this posting is required" when no skill is,
+  and a worked wrong/right pair when the gaps span more than one
+  category, both stated only when they apply to THIS result.
+
+- **Date**: 2026-08-28
+- **Decision**: The requirement-category check distributes across a
+  clause when a quantifier or a coordinated list says it should, and a
+  contrast word no longer excuses an assertion on its own.
+- **Problem**: Two holes pointing in opposite directions, both measured
+  live. The rule fired only when a clause named NO required skill, so
+  "<A> and <B>, both of which this posting requires" was accepted while
+  saying something false about B — 27 times in 30 runs, and the single
+  most common sentence the model produces. Meanwhile "the posting
+  mentions AWS as required" escaped because "mentions" counted as a
+  contrast marker, which made the escape a keyword rather than a
+  negation test. Neither is a loosening or a tightening: both are the
+  rule failing to mean what it says.
+- **Alternatives**: Rejecting any clause that names a non-required skill
+  near a requirement word (too eager — it would reject "you have <A>,
+  which this posting requires, and <B> as well", which is true); a
+  dependency parse (a dependency for one check).
+- **Trade-off**: THREE SIGNALS, each with a stated false-positive guard,
+  and every one of them pinned by a must-NOT-reject test beside the
+  must-reject one. A quantifier counts only within 45 characters of the
+  requirement marker, because "the posting requires <A> and prefers <B>,
+  both of which are missing" distributes the ABSENCE and is true — the
+  real model settled on exactly that sentence, and an unscoped
+  quantifier rejected it. A coordinated run counts only when joined by
+  commas and "and", so "requires <A> but you also bring <B>" stays legal.
+  The clause scope itself remains a real limit: "you have <A> and <B>;
+  each is required here" splits at the semicolon and the second half
+  names no skill, which `test_the_clause_scope_is_a_real_limit_and_is_
+  stated_as_one` pins as known rather than leaving to be discovered.
+- **Outcome**: `next_steps` also gained `minItems: 1` in the decoder
+  after a live run returned an explanation with no advice in it at all.
+  Pinned in the grammar only — `MatchExplanation` keeps its permissive
+  default, so a rejected narrative, the mock and the public contract are
+  all untouched.
+
+- **Date**: 2026-08-28
+- **Decision**: Record that a concrete negative example made a 7B model
+  WORSE, for the second time in this project.
+- **Problem**: On a result whose gaps span two categories the model
+  merges them — "the posting requires Kubernetes and AWS" — which is
+  true of the first and false of the second. A placeholder rule did not
+  stop it, so the rule was rewritten in the result's own skill names
+  with a wrong/right pair. The next five live runs rejected five times:
+  the model had started copying the WRONG line.
+- **Alternatives**: Dropping the rule; keeping the concrete example and
+  accepting the rejections.
+- **Trade-off**: The same lesson as the 6.4b roadmap prohibition, which
+  also made output worse: on a small model an example is a template
+  before it is an argument, and a negative example is still a template.
+  The wrong/right pair was kept only because the RIGHT half is what the
+  model now copies into its per-gap sentences, where it is correct — but
+  the summary still merges, and that is now caught rather than believed.
+- **Outcome**: A residual, stated rather than hidden. The multi-gap
+  shape is the least stable of the six, and when it fails it fails
+  CLOSED: the score, the categories and the gap list stay on screen and
+  only the written paragraph is withheld.
 
 <!-- Add new entries above this line, most recent first. -->

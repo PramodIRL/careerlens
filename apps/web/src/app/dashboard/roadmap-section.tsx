@@ -9,6 +9,8 @@ import {
   type RoadmapGapState,
   type RoadmapItem,
   type RoadmapResponse,
+  type RoadmapStep,
+  type RoadmapStepPhase,
   type RoadmapWeek,
 } from "@/lib/api-client";
 
@@ -67,6 +69,8 @@ const REASON_LABEL: Record<string, string> = {
   ungrounded_claim: "the explanation could not be tied to your data",
   invented_skill: "the explanation named a skill outside your plan",
   invented_number: "the explanation used a number not in your data",
+  contradicts_facts:
+    "the wording disagreed with the plan CareerLens calculated",
   disallowed_link: "the explanation included a link",
   response_too_large: "the response was too long",
   provider_timeout: "the explanation service did not answer in time",
@@ -78,6 +82,43 @@ const REASON_LABEL: Record<string, string> = {
  * is already an implausible day. */
 const MAX_HOURS_PER_DAY = 16;
 const DEFAULT_TOP_N = 5;
+/** Two days, not seven. Weeks are only a presentation grouping now, so
+ * an interview on Thursday is a legitimate plan rather than a
+ * validation error. The API enforces the same floor. */
+const MIN_DURATION_DAYS = 2;
+const MAX_DURATION_DAYS = 56;
+
+/** What each step is FOR. Decided by `roadmap_schedule_v2`, so this
+ * badge is readable whether or not a model wrote anything. */
+const PHASE_LABEL: Record<RoadmapStepPhase, string> = {
+  learn: "Learn",
+  practice: "Practise",
+  build: "Build",
+  prove: "Prove",
+  self_check: "Self-check",
+  demonstrate: "Demonstrate",
+  document: "Document",
+};
+
+const PHASE_CLASS: Record<RoadmapStepPhase, string> = {
+  learn:
+    "bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300",
+  practice: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  build:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  prove:
+    "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300",
+  self_check:
+    "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  demonstrate: "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300",
+  document: "bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-300",
+};
+
+function dayRange(startDay: number, endDay: number): string {
+  return startDay === endDay
+    ? `Day ${startDay}`
+    : `Days ${startDay}\u2013${endDay}`;
+}
 
 export default function RoadmapSection({
   accessToken,
@@ -148,8 +189,10 @@ export default function RoadmapSection({
         Learning roadmap
       </h2>
       <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-        Your current four-phase plan, built from your saved jobs and the gaps in
-        your evidence. It changes as your jobs and skills change.
+        A day-by-day plan built from your saved jobs and the gaps in your
+        evidence. CareerLens decides what to work on and when; the written
+        guidance turns that into steps. It changes as your jobs and skills
+        change.
       </p>
 
       <div className="mt-3 flex flex-wrap items-end gap-3">
@@ -191,8 +234,8 @@ export default function RoadmapSection({
           <input
             id="roadmap-days"
             type="number"
-            min={7}
-            max={56}
+            min={MIN_DURATION_DAYS}
+            max={MAX_DURATION_DAYS}
             value={durationDays}
             onChange={(event) => setDurationDays(Number(event.target.value))}
             className="w-24 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
@@ -265,12 +308,29 @@ function RoadmapPlan({ roadmap }: { roadmap: RoadmapResponse }) {
         <span className="text-zinc-500 dark:text-zinc-500">(estimated)</span>
       </p>
 
+      {/* HONEST, NOT APOLOGETIC. No single skill is stretched past a
+          fortnight, so a short list of gaps cannot fill a long window.
+          Saying so beats padding the plan with work the candidate's own
+          jobs never asked for. */}
+      {roadmap.coverage === "partial" && roadmap.scheduled_days > 0 && (
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">
+          Your saved jobs justify {roadmap.scheduled_days} days of focused work,
+          so {roadmap.unscheduled_days} of the {roadmap.duration_days} you asked
+          for are left unscheduled. Rather than stretch these skills to fill the
+          time, use it to go deeper on what is below — or save more jobs and
+          generate again.
+        </p>
+      )}
+
       {roadmap.narrative_status === "rejected" && (
         <p className="text-xs text-amber-800 dark:text-amber-300">
-          Task wording is unavailable —{" "}
+          {/* Same reordering as the explanation panel: the plan below is
+              the product, the wording is the optional extra. Opening with
+              the failure made a working feature look broken. */}
+          Your priorities and schedule below are complete — they are calculated
+          from your own saved jobs and evidence, not written by a model. The
+          written guidance could not be produced this time —{" "}
           {REASON_LABEL[roadmap.reason ?? ""] ?? "it could not be produced"}.
-          Your priorities and schedule below are unaffected: they are calculated
-          from your own saved jobs and evidence, not written by a model.
         </p>
       )}
 
@@ -295,7 +355,8 @@ function WeekBlock({ week }: { week: RoadmapWeek }) {
 
       {week.items.length === 0 ? (
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-          Nothing scheduled for this week.
+          Nothing scheduled for this week — your saved jobs did not produce
+          enough to fill it.
         </p>
       ) : (
         <>
@@ -314,6 +375,40 @@ function WeekBlock({ week }: { week: RoadmapWeek }) {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * One block of days: when, what mode, what to do, and how you know you
+ * finished it.
+ *
+ * THIS IS WHAT ANSWERS "WHAT SHOULD I DO TODAY". Before it existed, a
+ * fortnight-long priority rendered as a single instruction and the
+ * weeks in between looked empty.
+ */
+function StepRow({ step }: { step: RoadmapStep }) {
+  return (
+    <li className="border-l-2 border-zinc-200 pl-3 dark:border-zinc-800">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span
+          className={`rounded px-1.5 py-0.5 text-[11px] ${PHASE_CLASS[step.phase]}`}
+        >
+          {PHASE_LABEL[step.phase]}
+        </span>
+        <span className="text-[11px] text-zinc-500 dark:text-zinc-500">
+          {dayRange(step.start_day, step.end_day)} · about{" "}
+          {step.estimated_hours} hours (estimated)
+        </span>
+      </div>
+      {step.task && (
+        <p className="mt-1 text-xs text-black dark:text-zinc-50">{step.task}</p>
+      )}
+      {step.done_when && (
+        <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+          Done when: {step.done_when}
+        </p>
+      )}
+    </li>
   );
 }
 
@@ -349,10 +444,6 @@ function Detail({
  * as a report about the user rather than advice to them.
  */
 function RoadmapEntry({ item }: { item: RoadmapItem }) {
-  const dayRange =
-    item.start_day === item.end_day
-      ? `Day ${item.start_day}`
-      : `Days ${item.start_day}–${item.end_day}`;
   const lead = item.affected_jobs[0];
   const others = item.affected_jobs.length - 1;
 
@@ -373,7 +464,8 @@ function RoadmapEntry({ item }: { item: RoadmapItem }) {
           </span>
         </span>
         <span className="text-[11px] text-zinc-500 dark:text-zinc-500">
-          {dayRange} · about {item.estimated_hours} hours (estimated)
+          {dayRange(item.start_day, item.end_day)} · about{" "}
+          {item.estimated_hours} hours (estimated)
         </span>
       </div>
 
@@ -394,6 +486,17 @@ function RoadmapEntry({ item }: { item: RoadmapItem }) {
           {others > 0 &&
             ` and ${others} other ${others === 1 ? "job" : "jobs"}`}
         </p>
+      )}
+
+      {/* THE DAY-BY-DAY ANSWER. The days and the phase are computed;
+          only the sentence inside each one is written. A rejected
+          narrative therefore still leaves a real schedule to follow. */}
+      {item.steps.length > 0 && (
+        <ol className="mt-2 flex flex-col gap-2">
+          {item.steps.map((step) => (
+            <StepRow key={step.step_id} step={step} />
+          ))}
+        </ol>
       )}
 
       <Detail label="Why this?">{item.why}</Detail>

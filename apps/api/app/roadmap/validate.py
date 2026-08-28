@@ -6,12 +6,12 @@ returns the deterministic plan, so a rejection costs the user the
 wording and none of the substance.
 
 THE BIGGEST GUARANTEE IS NOT ENFORCED HERE — it is enforced by the
-shape. Items are keyed by `item_id`, so "the model added a skill",
-"dropped one" or "reordered the plan" are not violations to catch; there
-is no field to express them in. What remains for this module is
-narrower than 6.1's job: the key set must match exactly, and the prose
-must not smuggle in a skill, a job, a number or a link that the facts do
-not contain.
+shape. Items are keyed by `item_id` and steps by `step_id`, so "the
+model added a skill", "dropped one", "invented a block of days" or
+"reordered the plan" are not violations to catch; there is no field to
+express them in. What remains for this module is narrower than 6.1's
+job: the key sets must match exactly, and the prose must not smuggle in
+a skill, a job, a number or a link that the facts do not contain.
 
 THE LIMITS, STATED RATHER THAN IMPLIED. The skill check compares against
 the curated taxonomy, so a fabricated technology that is not in that
@@ -27,6 +27,7 @@ import re
 from pydantic import ValidationError
 
 from app.explanation.validate import ExplanationRejected, RejectionReason
+from app.roadmap.priority import DAYS_PER_WEEK
 from app.roadmap.schema import (
     MAX_RESPONSE_BYTES,
     RoadmapFacts,
@@ -36,11 +37,17 @@ from app.roadmap.schema import (
 # Matches app/explanation/validate.py. Kept as its own reference rather
 # than imported so a tightening there cannot silently change the rules
 # a roadmap is judged by.
-_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+# A quantity, not a digit inside a name. The lookarounds matter: without
+# them "EC2" yields "2", "S3" yields "3" and "K8s" yields "8", so any
+# roadmap mentioning ordinary cloud services was rejected for stating a
+# number nobody supplied. The rule's intent is "do not assert a quantity
+# we did not give you"; a digit inside an identifier is part of a name
+# and asserts nothing. Same boundary style `_check_skills` already uses.
+_NUMBER = re.compile(r"(?<![0-9A-Za-z])\d+(?:\.\d+)?(?![0-9A-Za-z])")
 _LINK = re.compile(r"https?://|www\.", re.IGNORECASE)
 
 
-def _allowed_numbers(facts: RoadmapFacts) -> frozenset[str]:
+def allowed_numbers(facts: RoadmapFacts) -> frozenset[str]:
     """Every quantity the facts actually contain.
 
     Built from the values, not from the serialised JSON: an id contains
@@ -60,10 +67,20 @@ def _allowed_numbers(facts: RoadmapFacts) -> frozenset[str]:
         str(facts.plan.total_hours),
         str(facts.plan.weeks),
     }
+    # The day each WEEK spans. Derived from the duration exactly as
+    # app/api/v1/roadmap.py derives the label a reader sees ("Days
+    # 8-14"), so a narrative referring to a week's span is quoting a
+    # deterministic fact — it was simply never exposed here, and the
+    # model was rejected for repeating something true.
+    for week in range(1, facts.plan.weeks + 1):
+        allowed.add(str((week - 1) * DAYS_PER_WEEK + 1))
+        allowed.add(str(min(week * DAYS_PER_WEEK, facts.plan.duration_days)))
     for job in facts.jobs:
         allowed.add(str(job.rank))
         if job.match_score is not None:
             allowed.add(str(job.match_score))
+    allowed.add(str(facts.plan.scheduled_days))
+    allowed.add(str(facts.plan.unscheduled_days))
     for item in facts.items:
         allowed.update(
             {
@@ -74,6 +91,18 @@ def _allowed_numbers(facts: RoadmapFacts) -> frozenset[str]:
                 str(item.estimated_hours),
             }
         )
+        # A step's own days and hours are deterministic facts about the
+        # plan, exactly as an item's are. Omitting them would reject a
+        # narrative for repeating something the schedule told it.
+        for step in item.steps:
+            allowed.update(
+                {
+                    str(step.week),
+                    str(step.start_day),
+                    str(step.end_day),
+                    str(step.estimated_hours),
+                }
+            )
         # The deterministic `why` already states counts in prose ("3 of
         # your 5 selected jobs"), so those numbers are legitimately
         # quotable back.
@@ -98,6 +127,7 @@ def _generated_text(narrative: RoadmapNarrative) -> list[str]:
             for item in narrative.items
             for text in (item.task, item.outcome, item.success_criteria)
         ]
+        + [text for step in narrative.steps for text in (step.task, step.done_when)]
     )
 
 
@@ -115,6 +145,29 @@ def _check_items(narrative: RoadmapNarrative, facts: RoadmapFacts) -> None:
         raise ExplanationRejected(RejectionReason.SCHEMA_INVALID, "duplicate item_id")
 
     expected = facts.item_ids()
+    unknown = set(returned) - expected
+    if unknown:
+        raise ExplanationRejected(RejectionReason.UNKNOWN_EVIDENCE_ID, sorted(unknown)[0])
+    missing = expected - set(returned)
+    if missing:
+        raise ExplanationRejected(RejectionReason.UNGROUNDED_CLAIM, f"missing {sorted(missing)[0]}")
+
+
+def _check_steps(narrative: RoadmapNarrative, facts: RoadmapFacts) -> None:
+    """The step key set must match the schedule's EXACTLY.
+
+    Same discipline as `_check_items`, for the same two reasons. An
+    extra step is a block of days nobody scheduled — and since every
+    step carries hours, an invented one is work outside the budget the
+    candidate declared. A missing one leaves a hole in the calendar the
+    UI would render as a day with nothing in it, which is the failure
+    6.4b exists to remove.
+    """
+    returned = [step.step_id for step in narrative.steps]
+    if len(returned) != len(set(returned)):
+        raise ExplanationRejected(RejectionReason.SCHEMA_INVALID, "duplicate step_id")
+
+    expected = facts.step_ids()
     unknown = set(returned) - expected
     if unknown:
         raise ExplanationRejected(RejectionReason.UNKNOWN_EVIDENCE_ID, sorted(unknown)[0])
@@ -148,7 +201,7 @@ def _check_weeks(narrative: RoadmapNarrative, facts: RoadmapFacts) -> None:
 
 
 def _check_numbers(narrative: RoadmapNarrative, facts: RoadmapFacts) -> None:
-    allowed = _allowed_numbers(facts)
+    allowed = allowed_numbers(facts)
     for text in _generated_text(narrative):
         for number in _NUMBER.findall(text):
             if number not in allowed:
@@ -164,14 +217,23 @@ def _check_skills(
     in rather than sent to the model — handing over a list of every
     skill in the product is an invitation to use one of them.
     """
-    allowed = facts.skill_names()
+    outside = {name for name in taxonomy if name not in facts.skill_names()}
+    if not outside:
+        return
+    # CASE-SENSITIVE, matching app/explanation/validate.py exactly.
+    # Lowercasing both sides made `\bgo\b` match the verb "go", `\breact\b`
+    # match "react to feedback" and `\bagile\b` match "an agile approach" —
+    # so ordinary mentoring prose was rejected for naming a skill it never
+    # named. Skill names are proper nouns; matching them as such is more
+    # accurate, not more permissive, and it stops the two validators
+    # disagreeing about the same rule.
+    patterns = [
+        (name, re.compile(rf"(?<![0-9A-Za-z]){re.escape(name)}(?![0-9A-Za-z])")) for name in outside
+    ]
     for text in _generated_text(narrative):
-        lowered = text.lower()
-        for skill in taxonomy:
-            if skill in allowed:
-                continue
-            if re.search(rf"\b{re.escape(skill.lower())}\b", lowered):
-                raise ExplanationRejected(RejectionReason.INVENTED_SKILL, skill)
+        for name, pattern in patterns:
+            if pattern.search(text):
+                raise ExplanationRejected(RejectionReason.INVENTED_SKILL, name)
 
 
 def _check_jobs(narrative: RoadmapNarrative, facts: RoadmapFacts) -> None:
@@ -249,6 +311,7 @@ def validate_narrative(
         raise ExplanationRejected(RejectionReason.SCHEMA_INVALID, str(error)) from error
 
     _check_items(narrative, facts)
+    _check_steps(narrative, facts)
     _check_weeks(narrative, facts)
     _check_evidence(narrative, facts)
     _check_links(narrative)

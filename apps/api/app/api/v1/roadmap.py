@@ -55,20 +55,27 @@ from app.roadmap.priority import (
     DAYS_PER_WEEK,
     FORMULA_VERSION,
     SCHEDULE_VERSION,
-    RoadmapItem,
+    Schedule,
     rank_items,
     schedule_items,
     week_count,
 )
 from app.roadmap.provider import get_roadmap_provider
 from app.roadmap.schema import SCHEMA_VERSION as NARRATIVE_SCHEMA_VERSION
-from app.roadmap.schema import NarrativeItem, NarrativeWeek, RoadmapEvidenceFact
+from app.roadmap.schema import (
+    NarrativeItem,
+    NarrativeStep,
+    NarrativeWeek,
+    RoadmapEvidenceFact,
+)
 from app.schemas.roadmap import (
     RoadmapAffectedJobResponse,
     RoadmapEvidenceResponse,
     RoadmapGapState,
     RoadmapItemResponse,
     RoadmapResponse,
+    RoadmapStepPhase,
+    RoadmapStepResponse,
     RoadmapWeekResponse,
 )
 from app.schemas.saved_job import JobGapResponse, JobMatchResponse
@@ -90,10 +97,17 @@ MIN_TOP_N = 1
 # range for a number they never typed.
 DEFAULT_TOP_N = 5
 
-# Bounds on the declared preparation window. A week is the shortest span
-# worth laying out day by day; eight weeks is where a preparation sprint
-# stops being one.
-MIN_DURATION_DAYS = 7
+# Bounds on the declared preparation window. Eight weeks is where a
+# preparation sprint stops being one.
+#
+# TWO DAYS, NOT SEVEN (Prompt 6.4b). The floor was a week because the
+# plan was laid out in weeks, and a sub-week window had nowhere to go.
+# It is laid out in DAYS now — weeks are only a presentation grouping,
+# `ceil(duration_days / 7)` — so an interview on Thursday is a
+# legitimate two-day plan rather than a validation error. One day is
+# still refused: a plan with no second day is a task list, and the
+# schedule has nothing to sequence.
+MIN_DURATION_DAYS = 2
 MAX_DURATION_DAYS = 56
 
 # A hard ceiling on declared study time. Sixteen hours is already an
@@ -128,7 +142,7 @@ async def read_roadmap(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RoadmapResponse:
-    """The candidate's current four-phase roadmap.
+    """The candidate's current learning roadmap.
 
     `top_n` is bounded by the caller's OWN saved-job count, which is a
     per-request fact rather than a static one — so asking for exactly as
@@ -194,6 +208,8 @@ async def read_roadmap(
             duration_days=duration_days,
             hours_per_day=hours_per_day,
             total_hours=total_hours,
+            unscheduled_days=duration_days,
+            coverage="partial",
         )
 
     # One match and one gap read per SELECTED job, through the same
@@ -222,10 +238,10 @@ async def read_roadmap(
             skill_id: [row.id for row in rows] for skill_id, rows in evidence_by_skill.items()
         },
     )
-    items = schedule_items(ranked, duration_days=duration_days, hours_per_day=hours_per_day)
+    schedule = schedule_items(ranked, duration_days=duration_days, hours_per_day=hours_per_day)
 
     facts = build_facts(
-        items=items,
+        schedule=schedule,
         selected=selected,
         evidence_by_skill=evidence_by_skill,
         duration_days=duration_days,
@@ -240,7 +256,7 @@ async def read_roadmap(
     )
 
     return _to_response(
-        items=items,
+        schedule=schedule,
         facts_evidence={row.evidence_id: row for row in facts.evidence},
         outcome_status=outcome.status,
         reason=outcome.reason,
@@ -252,6 +268,9 @@ async def read_roadmap(
         prose_by_item=(
             {item.item_id: item for item in outcome.narrative.items} if outcome.narrative else {}
         ),
+        prose_by_step=(
+            {step.step_id: step for step in outcome.narrative.steps} if outcome.narrative else {}
+        ),
         selected_job_count=len(selected),
         saved_job_count=saved_job_count,
         duration_days=duration_days,
@@ -262,7 +281,7 @@ async def read_roadmap(
 
 def _to_response(
     *,
-    items: list[RoadmapItem],
+    schedule: Schedule,
     facts_evidence: dict[uuid.UUID, RoadmapEvidenceFact],
     outcome_status: str,
     reason: str | None,
@@ -270,6 +289,7 @@ def _to_response(
     overview: str | None,
     weeks_by_number: dict[int, NarrativeWeek],
     prose_by_item: dict[str, NarrativeItem],
+    prose_by_step: dict[str, NarrativeStep],
     selected_job_count: int,
     saved_job_count: int,
     duration_days: int,
@@ -280,53 +300,79 @@ def _to_response(
 
     The deterministic fields are filled unconditionally; the written
     ones are filled only where a validated narrative supplied them. That
-    asymmetry is the design: a rejection empties `task`,
+    asymmetry is the design: a rejection empties `task`, `done_when`,
     `success_criteria`, `overview` and `focus`, and touches nothing
-    else.
+    else — the days, the phases and the priorities all survive.
+
+    AN ITEM APPEARS IN EVERY WEEK IT REALLY OCCUPIES (Prompt 6.4b),
+    carrying only that week's steps. Filing a fortnight-long item under
+    its start week alone is what produced "nothing scheduled for this
+    week" on a plan where the candidate was in fact meant to be working.
     """
     by_week: dict[int, list[RoadmapItemResponse]] = {}
 
-    for item in items:
+    for item in schedule.items:
         prose = prose_by_item.get(item.item_id)
-        by_week.setdefault(item.week, []).append(
-            RoadmapItemResponse(
-                item_id=item.item_id,
-                skill_id=item.skill_id,
-                skill_name=item.skill_name,
-                state=RoadmapGapState(item.state.value),
-                start_day=item.start_day,
-                end_day=item.end_day,
-                week=item.week,
-                score=item.score,
-                state_weight=item.state_weight,
-                recurrence=item.recurrence,
-                why=item.why,
-                affected_jobs=[
-                    RoadmapAffectedJobResponse(
-                        saved_job_id=job.saved_job_id,
-                        title=job.title,
-                        company=job.company,
-                        priority_rank=job.rank,
-                        match_score=job.match_score,
-                    )
-                    for job in item.affected_jobs
-                ],
-                evidence=[
-                    RoadmapEvidenceResponse(
-                        evidence_id=row.evidence_id,
-                        source_type=row.source_type,
-                        source_identifier=row.source_identifier,
-                        excerpt=row.excerpt,
-                    )
-                    for evidence_id in item.evidence_ids
-                    if (row := facts_evidence.get(evidence_id)) is not None
-                ],
-                estimated_hours=item.estimated_hours,
-                task=prose.task if prose else None,
-                outcome=prose.outcome if prose else None,
-                success_criteria=prose.success_criteria if prose else None,
+        steps_by_week: dict[int, list[RoadmapStepResponse]] = {}
+        for step in item.steps:
+            step_prose = prose_by_step.get(step.step_id)
+            steps_by_week.setdefault(step.week, []).append(
+                RoadmapStepResponse(
+                    step_id=step.step_id,
+                    phase=RoadmapStepPhase(step.phase.value),
+                    start_day=step.start_day,
+                    end_day=step.end_day,
+                    week=step.week,
+                    estimated_hours=step.estimated_hours,
+                    task=step_prose.task if step_prose else None,
+                    done_when=step_prose.done_when if step_prose else None,
+                )
             )
-        )
+
+        affected_jobs = [
+            RoadmapAffectedJobResponse(
+                saved_job_id=job.saved_job_id,
+                title=job.title,
+                company=job.company,
+                priority_rank=job.rank,
+                match_score=job.match_score,
+            )
+            for job in item.affected_jobs
+        ]
+        evidence = [
+            RoadmapEvidenceResponse(
+                evidence_id=row.evidence_id,
+                source_type=row.source_type,
+                source_identifier=row.source_identifier,
+                excerpt=row.excerpt,
+            )
+            for evidence_id in item.evidence_ids
+            if (row := facts_evidence.get(evidence_id)) is not None
+        ]
+
+        for week, steps in sorted(steps_by_week.items()):
+            by_week.setdefault(week, []).append(
+                RoadmapItemResponse(
+                    item_id=item.item_id,
+                    skill_id=item.skill_id,
+                    skill_name=item.skill_name,
+                    state=RoadmapGapState(item.state.value),
+                    start_day=item.start_day,
+                    end_day=item.end_day,
+                    week=item.week,
+                    score=item.score,
+                    state_weight=item.state_weight,
+                    recurrence=item.recurrence,
+                    why=item.why,
+                    affected_jobs=affected_jobs,
+                    evidence=evidence,
+                    estimated_hours=item.estimated_hours,
+                    steps=steps,
+                    task=prose.task if prose else None,
+                    outcome=prose.outcome if prose else None,
+                    success_criteria=prose.success_criteria if prose else None,
+                )
+            )
 
     return RoadmapResponse(
         formula_version=FORMULA_VERSION,
@@ -341,10 +387,16 @@ def _to_response(
         duration_days=duration_days,
         hours_per_day=hours_per_day,
         total_hours=total_hours,
+        scheduled_days=schedule.scheduled_days,
+        unscheduled_days=schedule.unscheduled_days,
+        coverage=schedule.coverage,
         overview=overview,
         # EVERY week of the declared window, including any that hold no
         # work: a plan that silently skips week 3 looks like a bug, and
-        # "nothing scheduled here" is the honest thing to render.
+        # "nothing scheduled here" is the honest thing to render. After
+        # 6.4b an empty week means the material genuinely ran out —
+        # `unscheduled_days` says so in the same response — rather than
+        # an item being filed under the wrong week.
         weeks=[
             RoadmapWeekResponse(
                 week=week,

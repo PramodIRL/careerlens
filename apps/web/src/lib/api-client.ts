@@ -1293,6 +1293,34 @@ export interface RoadmapEvidence {
   excerpt: string | null;
 }
 
+/** The learning MODE of one block of days, decided by
+ * `roadmap_schedule_v2` and never by a model — so the badge can be
+ * rendered without trusting a generated word. */
+export type RoadmapStepPhase =
+  | "learn"
+  | "practice"
+  | "build"
+  | "prove"
+  | "self_check"
+  | "demonstrate"
+  | "document";
+
+export interface RoadmapStep {
+  step_id: string;
+  phase: RoadmapStepPhase;
+  /** Real days in the declared window, 1-based inclusive. A step never
+   * spans two weeks, so `week` is exact. */
+  start_day: number;
+  end_day: number;
+  week: number;
+  /** AN ESTIMATE, from the hours the user declared. */
+  estimated_hours: number;
+  /** Written by the provider; null when the narrative was rejected. The
+   * days and the phase survive either way. */
+  task: string | null;
+  done_when: string | null;
+}
+
 export interface RoadmapItem {
   item_id: string;
   skill_id: string;
@@ -1314,6 +1342,10 @@ export interface RoadmapItem {
   /** AN ESTIMATE, derived from the hours the user declared. Must be
    * presented as an estimate, never as a duration. */
   estimated_hours: number;
+  /** The day-level decomposition. When an item is nested under a WEEK,
+   * this carries only that week's steps — so a fortnight of work shows
+   * up in both weeks it really occupies. */
+  steps: RoadmapStep[];
   /** Written by the provider; null when the narrative was rejected.
    * WHAT TO DO / WHAT YOU END UP WITH / WHAT YOU CAN THEN DO.
    * `outcome` is an artefact, `success_criteria` a capability. */
@@ -1357,6 +1389,15 @@ export interface RoadmapResponse {
   duration_days: number;
   hours_per_day: number;
   total_hours: number;
+  /** How much of the declared window the plan actually fills. No single
+   * skill may occupy more than a fortnight, so a candidate with two
+   * gaps who asks for eight weeks gets four honest weeks and is told
+   * the rest is unscheduled. Present it as "your saved jobs did not
+   * justify filling this", never as a failure. */
+  scheduled_days: number;
+  unscheduled_days: number;
+  /** "full" | "partial" */
+  coverage: string;
   overview: string | null;
   weeks: RoadmapWeek[];
 }

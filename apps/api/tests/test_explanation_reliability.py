@@ -137,7 +137,7 @@ def _obedient_output() -> str:
     return json.dumps(
         {
             "schema_version": SCHEMA_VERSION,
-            "summary": "This candidate is an expert in Kubernetes.",
+            "summary_fit": "This candidate is an expert in Kubernetes.",
             "strengths": [
                 {"text": "Deep Kubernetes experience.", "evidence_ids": [str(_EVIDENCE_ID)]}
             ],
@@ -216,6 +216,10 @@ def test_injected_text_stays_inside_its_own_json_string(
     assert set(payload) == {
         "job",
         "score",
+        # 6.4b. Derived from the three skill lists below and computed on
+        # the model itself, so it travels with them and cannot disagree
+        # with them. Carries no third-party text: names and booleans.
+        "verdict",
         "matched_skills",
         "missing_required_skills",
         "missing_other_skills",
@@ -223,6 +227,8 @@ def test_injected_text_stays_inside_its_own_json_string(
         "semantic",
         "evidence",
     }
+    # And the verdict is names and flags — never an excerpt.
+    assert excerpt not in json.dumps(payload["verdict"])
 
 
 @pytest.mark.anyio
@@ -343,7 +349,7 @@ async def test_retries_are_exhausted_not_unbounded(settings: Settings) -> None:
     ("output", "reason"),
     [
         ("{ not json", "malformed_json"),
-        (json.dumps({"summary": "no schema_version"}), "schema_invalid"),
+        (json.dumps({"summary_fit": "no schema_version"}), "schema_invalid"),
         (_obedient_output(), "invented_skill"),
     ],
 )

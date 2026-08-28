@@ -52,6 +52,12 @@ const REASON_LABEL: Record<string, string> = {
   ungrounded_claim: "it made a claim with no evidence behind it",
   invented_skill: "it named a skill this job never mentions",
   invented_number: "it stated a number the stored facts do not contain",
+  // 6.4b. The wording said something CareerLens did not: a matched skill
+  // described as missing, a preferred one called required, or a gap on a
+  // result that has none. The score and the skill table below are
+  // unaffected, which is what the copy has to convey.
+  contradicts_facts:
+    "it described your result differently from how CareerLens worked it out",
   disallowed_link: "it included a link",
   response_too_large: "the response was too long",
   // Provider-side failures (Prompt 6.2). Already retried where retrying
@@ -159,10 +165,15 @@ export default function JobExplanationPanel({
 
       {explanation && explanation.status === "rejected" && (
         <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
-          No explanation was shown because{" "}
+          {/* LEADS WITH WHAT WORKS. The score and gaps are complete and
+              always were — only the optional written summary failed, and
+              copy that opens with the failure makes a working feature
+              look broken. */}
+          Your match score and skill gaps above are complete. The written
+          summary could not be produced this time —{" "}
           {REASON_LABEL[explanation.reason ?? ""] ??
             "it could not be checked against your stored facts"}
-          . Your match score and skill gaps above are unaffected.
+          .
         </p>
       )}
 

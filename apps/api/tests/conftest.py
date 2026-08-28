@@ -175,6 +175,32 @@ def client() -> Generator[TestClient, None, None]:
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _force_mock_llm_provider(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Pin every test to the deterministic mock provider (Prompt 6.4a).
+
+    THE CODE DEFAULT IS ALREADY "mock" — but `Settings` reads the
+    repo-root .env, so a developer who sets EXPLANATION_PROVIDER=ollama
+    to try the real model would silently point the WHOLE SUITE at a
+    local daemon. Tests would then be slow, machine-dependent, and
+    quietly non-deterministic; on a machine without Ollama they would
+    fail for a reason that has nothing to do with the code under test.
+
+    Found by exactly that: the .env was switched to `ollama` and tests
+    that build a provider through `get_settings()` started resolving the
+    real one. "Offline by default" was true of the default and not of
+    the environment, so it is enforced here rather than assumed.
+
+    Overriding the environment variable rather than the Settings object
+    means it holds for every construction path, including the routes
+    that call `get_explanation_provider()` with no argument.
+    """
+    monkeypatch.setenv("EXPLANATION_PROVIDER", "mock")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_test_schema() -> Generator[None, None, None]:
     """Create an isolated schema — and its tables — for the test session,

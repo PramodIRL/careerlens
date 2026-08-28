@@ -105,9 +105,17 @@ def _facts(*, excerpt: str = "Built backend services in Python") -> ExplanationF
 
 
 def _output(**overrides: object) -> str:
+    """One provider payload, with any field overridden.
+
+    `summary=` is accepted as an alias for `summary_fit`: the summary is
+    two fields since 6.4b (a fit half and a gap half that is null when
+    there is no gap), and every caller here is exercising the fit half.
+    """
+    if "summary" in overrides:
+        overrides["summary_fit"] = overrides.pop("summary")
     payload: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
-        "summary": "Acme — Engineer: skill_match_v1 scored this match 75.",
+        "summary_fit": "Acme — Engineer: skill_match_v1 scored this match 75.",
         "strengths": [
             {"text": "Your evidence covers Python.", "evidence_ids": [str(_EVIDENCE_ID)]}
         ],
@@ -156,7 +164,9 @@ def test_malformed_json_is_rejected() -> None:
 
 
 def test_schema_violations_are_rejected() -> None:
-    assert _reject(json.dumps({"summary": "no schema_version"})) is RejectionReason.SCHEMA_INVALID
+    assert (
+        _reject(json.dumps({"summary_fit": "no schema_version"})) is RejectionReason.SCHEMA_INVALID
+    )
     # extra="forbid": a field nobody asked for is an error, not noise to
     # be dropped silently.
     assert _reject(_output(confidence=0.9)) is RejectionReason.SCHEMA_INVALID
