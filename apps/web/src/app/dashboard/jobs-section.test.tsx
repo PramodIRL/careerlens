@@ -12,6 +12,7 @@ const createSavedJobMock = vi.fn();
 const updateSavedJobMock = vi.fn();
 const deleteSavedJobMock = vi.fn();
 const importJobFromPdfMock = vi.fn();
+const reorderSavedJobsMock = vi.fn();
 // JobsSection renders a JobMatchPanel per job (Prompt 4.3), which
 // fetches its own score. Without this mock the panel makes a real
 // network call, fails, and renders a SECOND role="alert" — which made
@@ -33,6 +34,7 @@ vi.mock("@/lib/api-client", async () => {
     updateSavedJob: (...args: unknown[]) => updateSavedJobMock(...args),
     deleteSavedJob: (...args: unknown[]) => deleteSavedJobMock(...args),
     importJobFromPdf: (...args: unknown[]) => importJobFromPdfMock(...args),
+    reorderSavedJobs: (...args: unknown[]) => reorderSavedJobsMock(...args),
     getJobMatch: (...args: unknown[]) => getJobMatchMock(...args),
     getJobGaps: (...args: unknown[]) => getJobGapsMock(...args),
   };
@@ -81,6 +83,7 @@ beforeEach(() => {
   updateSavedJobMock.mockReset();
   deleteSavedJobMock.mockReset();
   importJobFromPdfMock.mockReset();
+  reorderSavedJobsMock.mockReset();
   getJobMatchMock.mockReset().mockResolvedValue({
     formula_version: "skill_match_v1",
     overall_score: 0,
@@ -648,5 +651,198 @@ describe("both paths converge", () => {
         screen.queryByText(/check these details before saving/i),
       ).not.toBeInTheDocument(),
     );
+  });
+});
+
+// =====================================================================
+// 7.1c — telling the dashboard the collection moved
+//
+// The roadmap's "jobs to prepare for" ceiling IS this collection's size,
+// and a plan it has drawn is about these specific jobs in this specific
+// order. Without `onJobsChanged` it learned neither, so deleting a job
+// left it asking for more jobs than existed and every Generate came back
+// 422 until the page was reloaded. See roadmap-section.test.tsx.
+//
+// ONLY ON SUCCESS, throughout: a mutation the server refused did not
+// change the collection, and saying otherwise would retire a roadmap
+// that is still current.
+// =====================================================================
+
+describe("reordering jobs", () => {
+  const first = job({ id: "job-1", title: "First" });
+  const second = job({ id: "job-2", title: "Second" });
+
+  it("sends the whole permutation, because the endpoint takes one", async () => {
+    listSavedJobsMock.mockResolvedValue([first, second]);
+    reorderSavedJobsMock.mockResolvedValue([second, first]);
+    renderSection();
+    await screen.findByText("First");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /move second up in priority/i }),
+    );
+
+    await waitFor(() =>
+      expect(reorderSavedJobsMock).toHaveBeenCalledWith(ACCESS_TOKEN, [
+        "job-2",
+        "job-1",
+      ]),
+    );
+  });
+
+  it("restores the previous order when the reorder fails", async () => {
+    listSavedJobsMock.mockResolvedValue([first, second]);
+    reorderSavedJobsMock.mockRejectedValue(
+      new ApiError(
+        422,
+        "job_ids must list each of your saved jobs exactly once",
+      ),
+    );
+    renderSection();
+    await screen.findByText("First");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /move second up in priority/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "job_ids must list each of your saved jobs exactly once",
+    );
+    // The optimistic swap was rolled back, so what is on screen is what
+    // the server actually holds.
+    const rows = screen.getAllByRole("listitem");
+    expect(within(rows[0]).getByText("First")).toBeInTheDocument();
+  });
+
+  it("reports the change so the roadmap can re-rank", async () => {
+    const onJobsChanged = vi.fn();
+    listSavedJobsMock.mockResolvedValue([first, second]);
+    reorderSavedJobsMock.mockResolvedValue([second, first]);
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText("First");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /move second up in priority/i }),
+    );
+
+    await waitFor(() => expect(onJobsChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it("reports nothing when the reorder was refused", async () => {
+    const onJobsChanged = vi.fn();
+    listSavedJobsMock.mockResolvedValue([first, second]);
+    reorderSavedJobsMock.mockRejectedValue(new ApiError(422, "nope"));
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText("First");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /move second up in priority/i }),
+    );
+
+    await screen.findByRole("alert");
+    expect(onJobsChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("reporting collection changes", () => {
+  it("reports a saved job", async () => {
+    const onJobsChanged = vi.fn();
+    createSavedJobMock.mockResolvedValue(job());
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText(/no saved jobs yet/i);
+
+    await fillCreateForm();
+    fireEvent.click(screen.getByRole("button", { name: "Save job" }));
+
+    await waitFor(() => expect(onJobsChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it("reports a deleted job", async () => {
+    const onJobsChanged = vi.fn();
+    listSavedJobsMock.mockResolvedValue([job()]);
+    deleteSavedJobMock.mockResolvedValue(undefined);
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText("Junior Backend Engineer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(onJobsChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it("reports nothing when a delete fails", async () => {
+    const onJobsChanged = vi.fn();
+    listSavedJobsMock.mockResolvedValue([job()]);
+    deleteSavedJobMock.mockRejectedValue(new ApiError(500, "could not delete"));
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText("Junior Backend Engineer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await screen.findByRole("alert");
+    expect(onJobsChanged).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing when a save fails", async () => {
+    const onJobsChanged = vi.fn();
+    createSavedJobMock.mockRejectedValue(new ApiError(422, "bad url"));
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText(/no saved jobs yet/i);
+
+    await fillCreateForm();
+    fireEvent.click(screen.getByRole("button", { name: "Save job" }));
+
+    await screen.findByRole("alert");
+    expect(onJobsChanged).not.toHaveBeenCalled();
+  });
+
+  it("is optional, so the section still works without a listener", async () => {
+    listSavedJobsMock.mockResolvedValue([job()]);
+    deleteSavedJobMock.mockResolvedValue(undefined);
+    renderSection();
+    await screen.findByText("Junior Backend Engineer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Junior Backend Engineer"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("does not refetch its own list after its own mutation", async () => {
+    // The dashboard deliberately keeps `jobsVersion` out of this
+    // section's own `refreshKey` (see page.tsx): the mutation response
+    // was already applied in place, so a refetch here would be a second
+    // request for data the component already has.
+    const onJobsChanged = vi.fn();
+    listSavedJobsMock.mockResolvedValue([job()]);
+    deleteSavedJobMock.mockResolvedValue(undefined);
+    render(
+      <JobsSection accessToken={ACCESS_TOKEN} onJobsChanged={onJobsChanged} />,
+    );
+    await screen.findByText("Junior Backend Engineer");
+    expect(listSavedJobsMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(onJobsChanged).toHaveBeenCalled());
+    expect(listSavedJobsMock).toHaveBeenCalledTimes(1);
   });
 });

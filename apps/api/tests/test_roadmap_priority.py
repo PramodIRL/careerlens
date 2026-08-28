@@ -37,7 +37,7 @@ from app.roadmap.priority import (
     schedule_items,
     week_count,
 )
-from app.roadmap.schema import MAX_STEPS
+from app.roadmap.schema import MAX_STEPS, MAX_WEEKS
 
 _PYTHON = uuid.UUID("11111111-1111-4111-8111-111111111111")
 _AWS = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -588,3 +588,138 @@ def test_the_plan_never_needs_more_steps_than_the_schema_allows() -> None:
                 _many_items(MAX_ITEMS), duration_days=duration, hours_per_day=hours
             )
             assert len(_all_steps(schedule)) <= MAX_STEPS, (duration, hours)
+
+
+# =====================================================================
+# 7.1a — the whole schedule surface, on a MIXED-STATE plan
+#
+# WHAT IS NEW HERE, stated precisely, because every individual property
+# below already has a neighbour above that checks it.
+#
+# Every existing schedule test builds its items with `_many_items` or
+# `_states`, so each plan holds ONE gap state. That is not what a
+# candidate has: a real plan mixes required, preferred and weak items,
+# and the three do not behave alike — `_PHASE_PLAN` gives the missing
+# states a five-rung ladder and weak evidence a three-rung one, so
+# `max_steps_for` differs per item and `_step_counts` divides a window
+# among items with different ceilings. The step arithmetic and the day
+# arithmetic have to agree on a plan neither was tuned on.
+#
+# The other half is COVERAGE OF THE SURFACE. The neighbours above sample
+# it: durations at fixed hours, hours at a fixed duration, item counts
+# pinned to MAX_ITEMS. This sweeps all three together, which is where a
+# boundary interaction lives — a two-day window with sixteen hours a day
+# is a different shape from fifty-six days at half an hour, and the item
+# budget moves under both.
+#
+# ASSERTED TOGETHER, ON ONE SCHEDULE, for the same reason: the failure
+# worth catching is a change that satisfies one invariant by breaking
+# another.
+# =====================================================================
+
+
+def _mixed(count: int) -> list[Any]:
+    """`count` items cycling through every gap state, ranked.
+
+    Cycled rather than random so a failure names one reproducible plan.
+    One selected job, because recurrence is not what this is about —
+    the neighbours above cover it, and a single job keeps the ranking
+    driven purely by state weight.
+    """
+    jobs = _jobs(1)
+    states = list(GapState)
+    return rank_items(
+        {
+            uuid.UUID(int=index, version=4): [
+                JobDemand(jobs[0].saved_job_id, states[index % len(states)])
+            ]
+            for index in range(count)
+        },
+        skill_names={
+            uuid.UUID(int=index, version=4): f"Skill {index:02d}" for index in range(count)
+        },
+        selected_jobs=jobs,
+    )
+
+
+def test_the_schedule_holds_every_invariant_on_a_mixed_state_plan() -> None:
+    """duration x hours x item count x mixed states, five invariants.
+
+    The bounds swept are the ones the API actually accepts
+    (app/api/v1/roadmap.py): 2-56 days, hours-per-day up to 16. Item
+    counts run past MAX_ITEMS on purpose — `schedule_items` is the thing
+    that has to truncate, and handing it exactly the budget would never
+    exercise that.
+    """
+    # Collected across the sweep so the guard at the end can prove the
+    # mixed case was actually REACHED. It cannot be asserted per
+    # iteration: truncation is from the bottom by priority, so a two-day
+    # window keeps only the top items and those are all required — which
+    # is the scheduler behaving correctly, not a fixture that failed to
+    # mix.
+    states_scheduled: set[GapState] = set()
+    mixed_plans = 0
+
+    for duration in (2, 3, 5, 7, 8, 13, 14, 21, 28, 30, 45, 55, 56):
+        for hours in (0.5, 1.0, 2.5, 4.0, 7.5, 16.0):
+            for count in (1, 2, 3, 5, 8, MAX_ITEMS, MAX_ITEMS + 4):
+                schedule = schedule_items(
+                    _mixed(count), duration_days=duration, hours_per_day=hours
+                )
+                where = f"{duration}d x {hours}h x {count} items"
+                items = schedule.items
+                steps = _all_steps(schedule)
+                assert items, where
+                assert steps, where
+
+                states = {item.state for item in items}
+                states_scheduled |= states
+                mixed_plans += len(states) > 1
+
+                # (a) SCHEDULED HOURS <= AVAILABLE HOURS. Each step's
+                # hours are rounded independently, so the tolerance is
+                # rounding drift, not slack.
+                assert sum(step.estimated_hours for step in steps) <= duration * hours + 0.5, where
+                assert sum(item.estimated_hours for item in items) <= duration * hours + 0.5, where
+
+                # (b) STEPS TILE THEIR ITEM'S SPAN.
+                for item in items:
+                    assert item.steps[0].start_day == item.start_day, where
+                    assert item.steps[-1].end_day == item.end_day, where
+                    for earlier, later in zip(item.steps, item.steps[1:], strict=False):
+                        assert later.start_day == earlier.end_day + 1, where
+                    assert sum(step.end_day - step.start_day + 1 for step in item.steps) == (
+                        item.end_day - item.start_day + 1
+                    ), where
+                    # A step with no days is a row in the UI with no time
+                    # attached to it.
+                    assert all(step.end_day >= step.start_day for step in item.steps), where
+                    # And no ladder is asked for more rungs than it has.
+                    assert len(item.steps) <= max_steps_for(item.state), where
+
+                # (c) ITEM SPANS TILE THE SCHEDULED DAYS, with the
+                # remainder declared rather than absorbed.
+                assert items[0].start_day == 1, where
+                assert items[-1].end_day == schedule.scheduled_days, where
+                for earlier, later in zip(items, items[1:], strict=False):
+                    assert later.start_day == earlier.end_day + 1, where
+                assert schedule.scheduled_days + schedule.unscheduled_days == duration, where
+                assert all(
+                    item.end_day - item.start_day + 1 <= MAX_DAYS_PER_ITEM for item in items
+                ), where
+
+                # (d) TOTAL STEPS <= MAX_STEPS, which is what the
+                # response schema declares in app/roadmap/schema.py.
+                assert len(steps) <= MAX_STEPS, where
+
+                # (e) WEEKS STAY WITHIN MAX_WEEKS, and within this
+                # window's own week count.
+                assert week_count(duration) <= MAX_WEEKS, where
+                assert all(1 <= step.week <= week_count(duration) for step in steps), where
+                assert all(1 <= item.week <= week_count(duration) for item in items), where
+
+    # THE GUARD ON THE SWEEP. Without it a change to `_mixed` or to the
+    # truncation rule could quietly reduce this to the single-state case
+    # its neighbours above already cover, and it would still pass.
+    assert states_scheduled == set(GapState)
+    assert mixed_plans > 0

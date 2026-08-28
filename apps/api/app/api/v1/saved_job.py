@@ -37,7 +37,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.auth import get_current_user
-from app.db import get_db
+from app.db import get_db, release_session
 from app.eligibility.extract import (
     extract_job_eligibility,
     list_job_eligibility_requirements,
@@ -50,6 +50,7 @@ from app.embeddings.semantic_fit import compute_semantic_fit
 from app.explanation.adapter import ExplanationOutcome, explain
 from app.explanation.facts import build_facts, load_evidence_by_skill, load_taxonomy_names
 from app.explanation.provider import get_explanation_provider
+from app.explanation.runtime import build_provider
 from app.explanation.schema import SCHEMA_VERSION as EXPLANATION_SCHEMA_VERSION
 from app.explanation.schema import ExplanationFacts
 from app.job_requirements.extract import extract_job_requirements, list_job_requirements
@@ -1006,11 +1007,23 @@ async def read_saved_job_explanation(
         semantic=semantic,
         evidence_by_skill=evidence_by_skill,
     )
-    outcome = await explain(
-        facts,
-        provider=get_explanation_provider(),
-        taxonomy=await load_taxonomy_names(db),
-    )
+    # THE LAST READ, and it must come before the release below rather
+    # than being evaluated as an argument to `explain` the way it used
+    # to be. Hoisted so the boundary is visible: everything above needs
+    # the database, nothing below it does.
+    taxonomy = await load_taxonomy_names(db)
+    # A construction failure is a rejected explanation, not a 500 — see
+    # app/explanation/runtime.py's `build_provider`.
+    provider = build_provider(get_explanation_provider, subject=str(saved_job_id))
+
+    # THE DATABASE IS DONE (Prompt 7.1b). `facts`, `match`, `gaps`,
+    # `semantic` and `taxonomy` are all materialised values, and neither
+    # `explain` nor `_to_explanation_response` touches a session — so
+    # the pooled connection is handed back before a wait that can run to
+    # `explanation_timeout_seconds`. See app/db.py's `release_session`.
+    await release_session(db)
+
+    outcome = await explain(facts, provider=provider, taxonomy=taxonomy)
 
     return _to_explanation_response(outcome, facts, match, gaps, semantic)
 

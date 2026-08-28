@@ -22,6 +22,7 @@ anything but ids, reasons and exception TYPE names.
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.explanation.prompt import ExplanationRequest
@@ -34,6 +35,68 @@ from app.explanation.validate import RejectionReason
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+# What the response reports as `provider` when there is no provider to
+# name — the configured one could not be BUILT, so nothing produced the
+# prose and nothing was going to. Honest rather than blank, and it is a
+# new value of an existing field, not a new field.
+UNAVAILABLE_PROVIDER_NAME = "unavailable"
+
+
+def build_provider(
+    factory: Callable[[], ExplanationProvider], *, subject: str
+) -> ExplanationProvider | None:
+    """Construct the configured provider, or None if it cannot be built
+    (Prompt 7.1b).
+
+    THE ORDERING THIS RESTORES:
+
+        deterministic result -> construction/generation -> success or
+        safe failure
+
+    A factory raises on an unknown `EXPLANATION_PROVIDER` rather than
+    quietly serving the mock, which is right and is NOT relaxed here:
+    app/explanation/provider.py and app/roadmap/provider.py still raise,
+    and their tests still pin it. What was wrong is where the raise
+    LANDED. Construction happens inside a request handler, so a typo in
+    one environment variable turned `/explanation` and `/roadmap` into
+    500s — destroying a score, a gap list and a whole learning plan that
+    were computed without a model and never needed one. The optional
+    layer failing must cost the wording and nothing else, and a
+    misconfigured provider is simply one more way for it to fail.
+
+    NOT A FALLBACK. Nothing is substituted: `None` means there is no
+    provider, the adapters return their existing `provider_error`
+    rejection, and no other provider is tried. The difference between
+    "we could not build what you configured" and "we quietly used
+    something else" is the whole point.
+
+    LOGGED AT `error`, WITH THE MESSAGE. The rest of this feature
+    deliberately records only exception TYPE names, because a provider's
+    own exceptions can quote request bodies containing a candidate's
+    resume text. This one is different in kind and the message is the
+    only thing that makes it actionable: it is raised by our own factory
+    over `EXPLANATION_PROVIDER`, it names the bad value and the valid
+    ones, and this product has no credential for it to expose — a fact
+    pinned by `test_no_credential_setting_exists`. An operator who
+    cannot see which name was rejected cannot fix it.
+    """
+    try:
+        return factory()
+    except Exception as error:
+        logger.error(
+            "explanation provider could not be constructed for %s (error=%s: %s); "
+            "serving the deterministic result without generated content",
+            subject,
+            type(error).__name__,
+            error,
+        )
+        return None
+
+
+def provider_name(provider: ExplanationProvider | None) -> str:
+    """What to report as `provider` when one may not exist."""
+    return UNAVAILABLE_PROVIDER_NAME if provider is None else provider.name
 
 
 @dataclass(frozen=True)

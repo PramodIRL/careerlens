@@ -382,3 +382,199 @@ describe("RoadmapSection", () => {
     );
   });
 });
+
+// =====================================================================
+// 7.1c — the saved-job collection changing underneath a rendered plan
+//
+// THE REPORTED BUG. `savedJobCount` was read once on mount, so deleting
+// a job left the section offering "5 of 5 saved jobs" against two that
+// existed. Every Generate came back 422, and because the count only
+// healed on a SUCCESSFUL response there was no way out but reloading.
+//
+// `jobsVersion` is the dashboard's signal that the collection moved —
+// added, deleted or reordered. See page.tsx.
+// =====================================================================
+
+describe("RoadmapSection when the saved jobs change", () => {
+  beforeEach(() => {
+    vi.mocked(getRoadmap).mockReset();
+    vi.mocked(listSavedJobs).mockReset();
+  });
+
+  /** Four jobs, then two — the deletion the bug report describes. */
+  function shrinkingCollection() {
+    vi.mocked(listSavedJobs)
+      .mockResolvedValueOnce([
+        { id: "a" },
+        { id: "b" },
+        { id: "c" },
+        { id: "d" },
+      ] as never)
+      .mockResolvedValue([{ id: "a" }, { id: "b" }] as never);
+  }
+
+  it("re-reads the count when a job is deleted", async () => {
+    shrinkingCollection();
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    expect(await screen.findByText(/of 4 saved jobs/)).toBeInTheDocument();
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+
+    expect(await screen.findByText(/of 2 saved jobs/)).toBeInTheDocument();
+  });
+
+  it("clamps the chosen job count down to what is left", async () => {
+    shrinkingCollection();
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    const input = await screen.findByLabelText(/jobs to prepare for/i);
+    await waitFor(() => expect(input).toHaveValue(4));
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+
+    await waitFor(() => expect(input).toHaveValue(2));
+    expect(input).toHaveAttribute("max", "2");
+  });
+
+  it("never asks for more jobs than the user still has", async () => {
+    // THE 422 ITSELF. Before the fix this sent top_n=4 against two saved
+    // jobs, the API refused it, and the section could not recover.
+    shrinkingCollection();
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/jobs to prepare for/i)).toHaveValue(4),
+    );
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/jobs to prepare for/i)).toHaveValue(2),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    await waitFor(() =>
+      expect(getRoadmap).toHaveBeenCalledWith("token", {
+        topN: 2,
+        durationDays: 28,
+        hoursPerDay: 1,
+      }),
+    );
+  });
+
+  it("withdraws a plan built from jobs that have since changed", async () => {
+    vi.mocked(listSavedJobs).mockResolvedValue([
+      { id: "a" },
+      { id: "b" },
+    ] as never);
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+
+    // The plan named "Acme — Engineer" as a selected job; that claim is
+    // no longer known to be true, so none of it stays on screen.
+    await waitFor(() => expect(screen.queryByText("AWS")).toBeNull());
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /saved jobs changed after this plan was made/i,
+    );
+  });
+
+  it("shows the fresh plan again once it is regenerated", async () => {
+    vi.mocked(listSavedJobs).mockResolvedValue([
+      { id: "a" },
+      { id: "b" },
+    ] as never);
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    await waitFor(() => expect(screen.queryByText("AWS")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/saved jobs changed after this plan was made/i),
+    ).toBeNull();
+  });
+
+  it("says nothing about staleness before anything was generated", async () => {
+    // Arriving on the page is not a change, and there is no plan to
+    // retire — the mount run of the effect must stay silent.
+    vi.mocked(listSavedJobs).mockResolvedValue([{ id: "a" }] as never);
+    render(<RoadmapSection accessToken="token" jobsVersion={3} />);
+
+    expect(await screen.findByText(/of 1 saved job/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/saved jobs changed after this plan was made/i),
+    ).toBeNull();
+  });
+
+  it("counts once per change, not once per render", async () => {
+    // THE PERFORMANCE GUARD. `jobsVersion` is a dependency, so a render
+    // that changes nothing must not re-read the collection.
+    vi.mocked(listSavedJobs).mockResolvedValue([{ id: "a" }] as never);
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    await waitFor(() => expect(listSavedJobs).toHaveBeenCalledTimes(1));
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={0} />);
+    rerender(<RoadmapSection accessToken="token" jobsVersion={0} />);
+    expect(listSavedJobs).toHaveBeenCalledTimes(1);
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    await waitFor(() => expect(listSavedJobs).toHaveBeenCalledTimes(2));
+  });
+
+  it("re-reads the count when a job is added", async () => {
+    vi.mocked(listSavedJobs)
+      .mockResolvedValueOnce([{ id: "a" }] as never)
+      .mockResolvedValue([{ id: "a" }, { id: "b" }] as never);
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    expect(await screen.findByText(/of 1 saved job/)).toBeInTheDocument();
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+
+    expect(await screen.findByText(/of 2 saved jobs/)).toBeInTheDocument();
+  });
+
+  it("retires a plan after a reorder, whose priorities have moved", async () => {
+    // The count is identical; `roadmap_priority_v1` reads the ORDER, so
+    // the ranks in a plan drawn before the move are no longer the
+    // user's.
+    vi.mocked(listSavedJobs).mockResolvedValue([
+      { id: "a" },
+      { id: "b" },
+    ] as never);
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" jobsVersion={0} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+
+    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+
+    await waitFor(() => expect(screen.queryByText("AWS")).toBeNull());
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /generate the roadmap again/i,
+    );
+  });
+});
