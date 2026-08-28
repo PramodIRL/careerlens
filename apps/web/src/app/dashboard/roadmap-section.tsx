@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -43,6 +43,17 @@ function clampTopN(value: number, savedJobCount: number): number {
 interface RoadmapSectionProps {
   accessToken: string;
   refreshKey?: number;
+  /** Bumped by the dashboard when the saved jobs changed — one was
+   * added, deleted, reordered or edited.
+   *
+   * ITS OWN PROP, not folded into `refreshKey`, because it means
+   * something `refreshKey` does not. Confirming a skill changes what
+   * the NEXT plan would say; changing the saved jobs changes what a
+   * plan already on screen is ABOUT — the jobs it names, the order it
+   * ranked them in, or the requirements it derived its gaps from. Only
+   * this signal can leave the section asking for more jobs than exist,
+   * or showing a plan built around one the user has just deleted. */
+  jobsVersion?: number;
 }
 
 const STATE_LABEL: Record<RoadmapGapState, string> = {
@@ -123,6 +134,7 @@ function dayRange(startDay: number, endDay: number): string {
 export default function RoadmapSection({
   accessToken,
   refreshKey = 0,
+  jobsVersion = 0,
 }: RoadmapSectionProps) {
   const [topN, setTopN] = useState(DEFAULT_TOP_N);
   // The ceiling on topN is the user's OWN saved-job count, so it has to
@@ -135,10 +147,19 @@ export default function RoadmapSection({
   const [roadmap, setRoadmap] = useState<RoadmapResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether the plan on screen predates a change to the saved jobs.
+  const [outdated, setOutdated] = useState(false);
 
   // The count only — never the roadmap. Generating a plan reaches an
   // LLM, so it stays behind an explicit click; knowing how many jobs
   // exist is a cheap read the control needs before the first one.
+  //
+  // RE-READ WHEN THE COLLECTION CHANGES, which is what `jobsVersion`
+  // reports. Without it this ran once and the ceiling went stale the
+  // moment a job was deleted: the input still offered "5 of 5 saved
+  // jobs" against two that existed, every Generate came back 422, and
+  // because the count only healed on a SUCCESSFUL response there was no
+  // way out but reloading the page.
   useEffect(() => {
     let cancelled = false;
     listSavedJobs(accessToken)
@@ -154,7 +175,22 @@ export default function RoadmapSection({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, refreshKey]);
+  }, [accessToken, refreshKey, jobsVersion]);
+
+  // A PLAN IS ABOUT THE JOBS IT WAS BUILT FROM. When those change it
+  // stops describing the user's actual situation — it can name a job
+  // they deleted, or rank by an order they have since changed — so it
+  // is withdrawn rather than left on screen looking current.
+  //
+  // The mount run is skipped by comparing against the version this
+  // component started with: arriving on the page is not a change, and
+  // there is nothing rendered to retire anyway.
+  const seenJobsVersion = useRef(jobsVersion);
+  useEffect(() => {
+    if (seenJobsVersion.current === jobsVersion) return;
+    seenJobsVersion.current = jobsVersion;
+    setOutdated(true);
+  }, [jobsVersion]);
 
   async function generate() {
     setLoading(true);
@@ -166,6 +202,9 @@ export default function RoadmapSection({
         hoursPerDay,
       });
       setRoadmap(next);
+      // Built from the jobs as they are now, so whatever made the last
+      // one stale no longer applies.
+      setOutdated(false);
       // Self-healing: if a job was deleted in another tab, the ceiling
       // and the input correct themselves here.
       setSavedJobCount(next.saved_job_count);
@@ -277,7 +316,24 @@ export default function RoadmapSection({
         </p>
       )}
 
-      {roadmap && <RoadmapPlan roadmap={roadmap} />}
+      {/* WITHDRAWN, NOT QUIETLY LEFT UP. The alternative was showing a
+          plan that still lists a job the user has just deleted as one
+          of their selected jobs, which is a false statement about their
+          own data — the same thing app/api/v1/roadmap.py refuses to
+          persist a plan for. Saying why, and what to do about it, beats
+          both silently clearing it and silently keeping it. */}
+      {roadmap && outdated ? (
+        <p
+          role="status"
+          className="mt-3 text-xs text-amber-800 dark:text-amber-300"
+        >
+          Your saved jobs changed after this plan was made, so it is no longer
+          shown — it was built from the jobs you had before. Generate the
+          roadmap again for an up-to-date plan.
+        </p>
+      ) : (
+        roadmap && <RoadmapPlan roadmap={roadmap} />
+      )}
     </section>
   );
 }

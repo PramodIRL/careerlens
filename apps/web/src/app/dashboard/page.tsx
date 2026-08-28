@@ -49,6 +49,20 @@ export default function DashboardPage() {
   //                         make the skill sections refetch data that
   //                         cannot have changed.
   const [qualificationVersion, setQualificationVersion] = useState(0);
+  //   jobsVersion           the saved jobs changed — one was added,
+  //                         deleted, reordered or edited. Only the
+  //                         roadmap cares, and it is the one signal that
+  //                         can make an already-rendered plan describe
+  //                         something that is no longer true.
+  //
+  //                         Deliberately NOT added to the sum below.
+  //                         JobsSection must not refetch its own list
+  //                         after its own mutation — it already applied
+  //                         the result — and the roadmap needs to tell
+  //                         "your jobs changed" apart from "your skills
+  //                         changed", because only the first invalidates
+  //                         a plan it has already drawn.
+  const [jobsVersion, setJobsVersion] = useState(0);
 
   // Stable identities — these are effect dependencies in the children,
   // so an inline arrow would re-run those effects on every render.
@@ -65,6 +79,8 @@ export default function DashboardPage() {
     () => setQualificationVersion((n) => n + 1),
     [],
   );
+
+  const handleJobsChanged = useCallback(() => setJobsVersion((n) => n + 1), []);
 
   // Protected navigation: the single redirect authority for leaving this
   // page whenever there's no valid session — covers both a mount-time
@@ -174,6 +190,7 @@ export default function DashboardPage() {
         <JobsSection
           accessToken={accessToken}
           refreshKey={externalVersion + profileVersion + qualificationVersion}
+          onJobsChanged={handleJobsChanged}
         />
       </div>
 
@@ -182,9 +199,15 @@ export default function DashboardPage() {
           here. Generated only on an explicit click — see
           RoadmapSection. */}
       <div className="w-full max-w-sm">
+        {/* TWO SIGNALS, because they mean different things. `refreshKey`
+            says the candidate's evidence moved, so the next plan will
+            differ. `jobsVersion` says the jobs the plan is ABOUT moved —
+            which re-bounds "jobs to prepare for" and retires a plan
+            already on screen. */}
         <RoadmapSection
           accessToken={accessToken}
           refreshKey={externalVersion + profileVersion + qualificationVersion}
+          jobsVersion={jobsVersion}
         />
       </div>
 

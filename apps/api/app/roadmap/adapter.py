@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.explanation.provider import ExplanationProvider
-from app.explanation.runtime import call_provider
-from app.explanation.validate import ExplanationRejected
+from app.explanation.runtime import UNAVAILABLE_PROVIDER_NAME, call_provider
+from app.explanation.validate import ExplanationRejected, RejectionReason
 from app.roadmap.prompt import build_request
 from app.roadmap.schema import RoadmapFacts, RoadmapNarrative
 from app.roadmap.validate import validate_narrative
@@ -47,14 +47,29 @@ class NarrativeOutcome:
 async def narrate(
     facts: RoadmapFacts,
     *,
-    provider: ExplanationProvider,
+    provider: ExplanationProvider | None,
     taxonomy: frozenset[str],
     settings: Settings | None = None,
 ) -> NarrativeOutcome:
-    """Ask the provider to phrase this plan, and validate the answer."""
+    """Ask the provider to phrase this plan, and validate the answer.
+
+    `provider=None` means the configured one could not be BUILT — see
+    app/explanation/runtime.py's `build_provider`. A plan whose wording
+    was never attempted is in exactly the state this module already
+    handles: the days, the priorities and every `why` were decided
+    before a provider was reached for, and they are returned unchanged.
+    """
     settings = settings or get_settings()
     started = time.monotonic()
     subject = f"roadmap({len(facts.items)} items)"
+
+    if provider is None:
+        return NarrativeOutcome(
+            status="rejected",
+            provider=UNAVAILABLE_PROVIDER_NAME,
+            reason=RejectionReason.PROVIDER_ERROR.value,
+            attempts=0,
+        )
 
     run = await call_provider(provider, build_request(facts), settings=settings, subject=subject)
     if run.raw is None:

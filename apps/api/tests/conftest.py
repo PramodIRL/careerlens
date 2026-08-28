@@ -56,6 +56,13 @@ _MANAGED_TABLES = (
     "github_repository_topics",
     "github_ingestion_runs",
     "candidate_qualifications",
+    # The two job-side tables are listed EXPLICITLY even though
+    # `TRUNCATE ... CASCADE` from `users` already reaches them: the
+    # assertion above only proves the tables it is given, so a table
+    # left off this tuple is a table nobody checks lives in TEST_SCHEMA.
+    # That is precisely the hole the 2026-08-27 incident went through.
+    "saved_jobs",
+    "job_skill_requirements",
     "job_eligibility_requirements",
     "job_eligibility_requirement_values",
     "embeddings",

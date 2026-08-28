@@ -42,7 +42,7 @@ from typing import Literal
 
 from app.explanation.prompt import build_request
 from app.explanation.provider import ExplanationProvider
-from app.explanation.runtime import call_provider
+from app.explanation.runtime import UNAVAILABLE_PROVIDER_NAME, call_provider
 from app.explanation.schema import ExplanationFacts, MatchExplanation
 from app.explanation.validate import (
     ExplanationRejected,
@@ -77,7 +77,7 @@ class ExplanationOutcome:
 async def explain(
     facts: ExplanationFacts,
     *,
-    provider: ExplanationProvider,
+    provider: ExplanationProvider | None,
     taxonomy: frozenset[str],
     settings: Settings | None = None,
 ) -> ExplanationOutcome:
@@ -92,9 +92,26 @@ async def explain(
     returned nonsense: no explanation, a reason, and the deterministic
     facts still served. The model is never on the critical path for the
     score.
+
+    `provider=None` means the configured one could not be BUILT — see
+    app/explanation/runtime.py's `build_provider`. It is treated as one
+    more way for the optional layer to fail, because that is what it is:
+    the same rejected outcome, carrying the reason this module already
+    uses for a provider that broke in a way retrying cannot fix.
     """
     settings = settings or get_settings()
     started = time.monotonic()
+
+    if provider is None:
+        # No call to log the duration of, and nothing to retry. The
+        # construction failure itself was already logged, at `error`,
+        # where the operator can act on it.
+        return ExplanationOutcome(
+            status="rejected",
+            provider=UNAVAILABLE_PROVIDER_NAME,
+            reason=RejectionReason.PROVIDER_ERROR.value,
+            attempts=0,
+        )
 
     run = await call_provider(
         provider,

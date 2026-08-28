@@ -35,13 +35,27 @@ interface JobsSectionProps {
    * job's match score refetches. The score is derived server-side from
    * current rows, so a stale panel is the only way it can be wrong. */
   refreshKey?: number;
+  /** Called after the caller's saved jobs actually changed — one was
+   * added, deleted, reordered or edited, and the server agreed.
+   *
+   * ALL FOUR, because the roadmap is derived from more than the size of
+   * this list. Adding or deleting moves the count and so the "jobs to
+   * prepare for" ceiling; reordering moves the priority
+   * `roadmap_priority_v1` reads; editing a description re-derives that
+   * job's requirements and so its gaps. Each one leaves a plan drawn
+   * beforehand describing something that is no longer true.
+   *
+   * ONLY ON SUCCESS. A failed delete leaves everything exactly as it
+   * was, and telling the dashboard otherwise would retire a roadmap
+   * that is still perfectly current. */
+  onJobsChanged?: () => void;
 }
 
-// Deliberately NOT wired into the dashboard's refresh counters. A saved
-// job produces no skill evidence in Prompt 4.1, so the skill sections
-// have nothing to refetch when one changes. Coupling them now would be
-// a dependency with no data behind it; that belongs to Prompt 4.2/4.3,
-// when a job actually contributes skills.
+// The SKILL sections are still not wired to this one, and that has not
+// changed: a saved job produces no skill evidence, so they have nothing
+// to refetch when one moves. `onJobsChanged` above is a different
+// claim — it reports that the saved jobs themselves changed, which is
+// exactly what the roadmap is derived from.
 
 const EMPLOYMENT_TYPES: { value: EmploymentType; label: string }[] = [
   { value: "full_time", label: "Full-time" },
@@ -140,6 +154,7 @@ function formatDate(iso: string): string {
 export default function JobsSection({
   accessToken,
   refreshKey = 0,
+  onJobsChanged,
 }: JobsSectionProps) {
   const [jobs, setJobs] = useState<SavedJobResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -240,6 +255,7 @@ export default function JobsSection({
       setJobs((prev) => [created, ...prev]);
       setValues(EMPTY_FORM);
       setDraftNotes(null);
+      onJobsChanged?.();
     } catch (err) {
       // A 422 here is the API's own validation message (a bad URL, an
       // over-long description), which is the useful thing to show.
@@ -263,6 +279,14 @@ export default function JobsSection({
       );
       setJobs((prev) => prev.map((job) => (job.id === id ? updated : job)));
       setEditingId(null);
+      // AN EDIT COUNTS, even though the collection is the same size and
+      // holds the same jobs. Changing the description re-derives that
+      // job's skill requirements server-side (app/api/v1/saved_job.py),
+      // which moves its gaps and therefore the roadmap built from them —
+      // so a plan drawn before this edit describes requirements that no
+      // longer exist, exactly as one drawn before a reorder describes
+      // priorities that no longer hold.
+      onJobsChanged?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "something went wrong");
     } finally {
@@ -294,6 +318,10 @@ export default function JobsSection({
           next.map((job) => job.id),
         ),
       );
+      // The count is unchanged, but the ORDER is the roadmap's priority
+      // signal — `roadmap_priority_v1` reads it — so a plan drawn from
+      // the old order is out of date even though every job survives.
+      onJobsChanged?.();
     } catch (err) {
       setJobs(previous);
       setError(err instanceof ApiError ? err.message : "something went wrong");
@@ -309,6 +337,7 @@ export default function JobsSection({
       await deleteSavedJob(accessToken, id);
       setJobs((prev) => prev.filter((job) => job.id !== id));
       setConfirmingId(null);
+      onJobsChanged?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "something went wrong");
     } finally {

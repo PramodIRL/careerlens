@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pushMock = vi.fn();
@@ -16,6 +22,13 @@ const getSkillProfileMock = vi.fn();
 const getGitHubConnectionMock = vi.fn();
 const deleteResumeMock = vi.fn();
 const disconnectGitHubMock = vi.fn();
+// 7.1c: the dashboard now relays saved-job changes from JobsSection
+// to RoadmapSection, so both sections' reads have to be mocked for
+// that wiring to be observable.
+const listSavedJobsMock = vi.fn();
+const deleteSavedJobMock = vi.fn();
+const updateSavedJobMock = vi.fn();
+const getRoadmapMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -44,6 +57,10 @@ vi.mock("@/lib/api-client", async () => {
       getGitHubConnectionMock(...args),
     deleteResume: (...args: unknown[]) => deleteResumeMock(...args),
     disconnectGitHub: (...args: unknown[]) => disconnectGitHubMock(...args),
+    listSavedJobs: (...args: unknown[]) => listSavedJobsMock(...args),
+    deleteSavedJob: (...args: unknown[]) => deleteSavedJobMock(...args),
+    updateSavedJob: (...args: unknown[]) => updateSavedJobMock(...args),
+    getRoadmap: (...args: unknown[]) => getRoadmapMock(...args),
   };
 });
 
@@ -82,6 +99,10 @@ beforeEach(() => {
   refreshMock.mockReset();
   getCurrentUserMock.mockReset();
   logoutMock.mockReset();
+  listSavedJobsMock.mockReset().mockResolvedValue([]);
+  deleteSavedJobMock.mockReset();
+  updateSavedJobMock.mockReset();
+  getRoadmapMock.mockReset();
   getProfileMock.mockReset().mockResolvedValue({
     user_id: MOCK_USER.id,
     full_name: null,
@@ -281,5 +302,188 @@ describe("dashboard refresh coordination on removal", () => {
         profileBefore,
       );
     });
+  }, 10000);
+});
+
+// =====================================================================
+// 7.1c — the dashboard relays saved-job changes to the roadmap
+//
+// THE WIRING ITSELF. jobs-section.test.tsx proves the callback fires and
+// roadmap-section.test.tsx proves the section reacts to `jobsVersion`;
+// neither can prove the dashboard actually connects the two, which is
+// exactly what was missing and what left the roadmap stuck on a stale
+// count until the page was reloaded.
+// =====================================================================
+
+describe("dashboard saved-job coordination", () => {
+  beforeEach(() => {
+    refreshMock.mockResolvedValue({ access_token: "tok" });
+    getCurrentUserMock.mockResolvedValue(MOCK_USER);
+    listResumesMock.mockResolvedValue([]);
+  });
+
+  // One week, one item — enough for the plan to be visibly on screen
+  // before the edit and visibly gone after it. The full rendering is
+  // roadmap-section.test.tsx's business.
+  const PLAN = {
+    formula_version: "roadmap_priority_v1",
+    schedule_version: "roadmap_schedule_v2",
+    narrative_schema_version: "roadmap_narrative_v1",
+    narrative_status: "generated",
+    reason: null,
+    provider: "mock",
+    selected_job_count: 1,
+    saved_job_count: 1,
+    has_selected_jobs: true,
+    duration_days: 7,
+    hours_per_day: 1,
+    total_hours: 7,
+    scheduled_days: 7,
+    unscheduled_days: 0,
+    coverage: "full",
+    overview: "A plan for the week ahead.",
+    weeks: [
+      {
+        week: 1,
+        label: "Week 1 \u00b7 Days 1\u20137",
+        start_day: 1,
+        end_day: 7,
+        focus: "Working on AWS",
+        checkpoint: "You can explain what you built with AWS.",
+        items: [
+          {
+            item_id: "skill-1",
+            skill_id: "skill-1",
+            skill_name: "AWS",
+            state: "missing_required",
+            start_day: 1,
+            end_day: 7,
+            week: 1,
+            score: 105,
+            state_weight: 100,
+            recurrence: 5,
+            why: "AWS is missing and is required by 1 of your 1 selected job.",
+            affected_jobs: [
+              {
+                saved_job_id: "job-1",
+                title: "Junior Backend Engineer",
+                company: "Fictional Widgets Ltd",
+                priority_rank: 1,
+                match_score: 40,
+              },
+            ],
+            evidence: [],
+            estimated_hours: 7,
+            steps: [],
+            task: "Build something small with AWS.",
+            outcome: "A running project that uses AWS.",
+            success_criteria: "Someone else can run it from your notes.",
+          },
+        ],
+      },
+    ],
+  };
+
+  const savedJob = {
+    id: "job-1",
+    company: "Fictional Widgets Ltd",
+    title: "Junior Backend Engineer",
+    location: null,
+    employment_type: null,
+    source_url: null,
+    description: "Build internal services.",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+
+  it("re-reads the saved-job count when a job is deleted", async () => {
+    listSavedJobsMock.mockResolvedValue([savedJob]);
+    deleteSavedJobMock.mockResolvedValue(undefined);
+
+    renderDashboard();
+    // Both sections read the collection on mount.
+    await screen.findByText("Junior Backend Engineer");
+    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalled());
+    const readsBefore = listSavedJobsMock.mock.calls.length;
+
+    // The roadmap's ceiling now has to come down, and only the dashboard
+    // can tell it so.
+    listSavedJobsMock.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() =>
+      expect(listSavedJobsMock.mock.calls.length).toBeGreaterThan(readsBefore),
+    );
+  }, 10000);
+
+  it("re-reads the roadmap's count only, not the job list as well", async () => {
+    // THE OTHER HALF. `jobsVersion` is deliberately kept out of
+    // JobsSection's own `refreshKey` (see page.tsx): it already applied
+    // the delete in place, so a refetch there would be a second request
+    // for data it holds. Both sections read the same endpoint, so the
+    // CALL COUNT is what tells them apart — two on mount, one more after
+    // the delete, never two more.
+    listSavedJobsMock.mockResolvedValue([savedJob]);
+    deleteSavedJobMock.mockResolvedValue(undefined);
+
+    renderDashboard();
+    await screen.findByText("Junior Backend Engineer");
+    // One read per section: JobsSection's list, RoadmapSection's count.
+    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalledTimes(2));
+
+    listSavedJobsMock.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalledTimes(3));
+    // And it settles there — no loop, and no redundant refetch of a list
+    // the section just updated itself.
+    await waitFor(() =>
+      expect(screen.queryByText("Junior Backend Engineer")).toBeNull(),
+    );
+    expect(listSavedJobsMock).toHaveBeenCalledTimes(3);
+  }, 10000);
+
+  it("withdraws the roadmap when a job description is edited", async () => {
+    // AN EDIT MOVES NO JOB AND CHANGES NO COUNT, and is still a change
+    // the roadmap has to hear about: the description is what the server
+    // derives that job's skill requirements from, so editing it moves
+    // the gaps the plan was built out of. A plan drawn beforehand
+    // describes requirements that no longer exist.
+    listSavedJobsMock.mockResolvedValue([savedJob]);
+    getRoadmapMock.mockResolvedValue(PLAN);
+    updateSavedJobMock.mockResolvedValue({
+      ...savedJob,
+      description: "Now asks for Kubernetes instead.",
+    });
+
+    renderDashboard();
+    await screen.findByText("Junior Backend Engineer");
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+    const readsBefore = listSavedJobsMock.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const form = screen.getByRole("form", {
+      name: "Edit Junior Backend Engineer",
+    });
+    fireEvent.change(within(form).getByLabelText("Job description"), {
+      target: { value: "Now asks for Kubernetes instead." },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateSavedJobMock).toHaveBeenCalled());
+
+    // The plan is withdrawn rather than left up describing gaps derived
+    // from a description that no longer exists.
+    await waitFor(() => expect(screen.queryByText("AWS")).toBeNull());
+    expect(
+      screen.getByText(/saved jobs changed after this plan was made/i),
+    ).toBeInTheDocument();
+    // And the live job state was re-read, so the count and the ceiling
+    // reflect the edited collection.
+    expect(listSavedJobsMock.mock.calls.length).toBeGreaterThan(readsBefore);
   }, 10000);
 });

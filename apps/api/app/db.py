@@ -52,3 +52,41 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields a database session."""
     async with _session_factory() as session:
         yield session
+
+
+async def release_session(db: AsyncSession) -> None:
+    """Hand the pooled connection back BEFORE a long wait (Prompt 7.1b).
+
+    WHY THIS EXISTS. `get_db` holds one session for the whole request,
+    and a session keeps its connection checked out from the first query
+    until it is closed. That is exactly right for a request that only
+    talks to the database — and wrong for the two that then wait on a
+    local language model for up to `explanation_timeout_seconds`, which
+    is 180. Those routes read nothing after the model answers, so the
+    connection was being held for a wait that cannot use it.
+
+    The cost is not theoretical: the engine's default pool is five
+    connections plus ten overflow. Fifteen concurrent explanations —
+    a candidate expanding five saved jobs across three tabs — would hold
+    every connection in the pool while generating, and `/match`, `/gaps`
+    and every other endpoint would queue behind `pool_timeout` and then
+    fail. The optional AI layer would have taken down the deterministic
+    product, which is the one thing this architecture exists to prevent.
+
+    WHAT THE CALLER MUST GUARANTEE. Every value still needed after this
+    returns must already be MATERIALISED — a Pydantic model, a
+    dataclass, or a plain scalar. `close()` expunges the session's
+    instances, so an ORM object read afterwards would be detached and a
+    lazy load would raise. Both call sites assemble their facts and
+    their response inputs first, and neither touches the session again.
+
+    NOT A ROLLBACK OF ANYTHING MEANINGFUL. Both callers are read-only —
+    no INSERT, no UPDATE, no commit — so there is no work in flight to
+    lose. `close()` ends the implicitly-begun read transaction and
+    returns the connection to the pool.
+
+    SAFE TO BE FOLLOWED BY `get_db`'s OWN TEARDOWN. The dependency's
+    context manager closes the session again when the request ends;
+    closing twice is a no-op.
+    """
+    await db.close()

@@ -39,8 +39,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.auth import get_current_user
 from app.api.v1.saved_job import read_saved_job_gaps, read_saved_job_match
-from app.db import get_db
+from app.db import get_db, release_session
 from app.explanation.facts import load_taxonomy_names
+from app.explanation.runtime import build_provider, provider_name
 from app.models.saved_job import SavedJob
 from app.models.user import User
 from app.roadmap.adapter import narrate
@@ -188,7 +189,16 @@ async def read_roadmap(
 
     selected_rows = select_jobs(list(jobs), top_n=top_n)
     total_hours = round(duration_days * hours_per_day, 1)
-    provider = get_roadmap_provider()
+    # BUILT HERE, BUT IT CAN NO LONGER RAISE (Prompt 7.1b). The empty
+    # response below names the provider, so construction has to happen
+    # before it — and a misconfigured `EXPLANATION_PROVIDER` used to
+    # make that a 500, destroying a plan computed entirely without a
+    # model. `build_provider` returns None instead, which `narrate`
+    # treats as one more way for the optional layer to fail. The
+    # ordering the product needs is causal, not positional: nothing
+    # about constructing a provider can now cost the deterministic
+    # answer.
+    provider = build_provider(get_roadmap_provider, subject="roadmap")
 
     if not selected_rows:
         # No saved jobs is not an empty roadmap — it is a statement
@@ -201,7 +211,7 @@ async def read_roadmap(
             narrative_schema_version=NARRATIVE_SCHEMA_VERSION,
             narrative_status="rejected",
             reason="no_selected_jobs",
-            provider=provider.name,
+            provider=provider_name(provider),
             selected_job_count=0,
             saved_job_count=saved_job_count,
             has_selected_jobs=False,
@@ -249,18 +259,26 @@ async def read_roadmap(
         total_hours=total_hours,
     )
 
-    outcome = await narrate(
-        facts,
-        provider=provider,
-        taxonomy=await load_taxonomy_names(db),
-    )
+    # THE LAST READ, hoisted out of the `narrate` call it used to be an
+    # argument to, so the boundary below is visible: everything above
+    # needs the database, nothing after it does.
+    taxonomy = await load_taxonomy_names(db)
+
+    # THE DATABASE IS DONE (Prompt 7.1b). `schedule` is dataclasses,
+    # `facts` is a Pydantic model, and `_to_response` reads only those —
+    # so the pooled connection goes back before a wait that can run to
+    # `explanation_timeout_seconds`, which for a full narrative is the
+    # longest wait in this product. See app/db.py's `release_session`.
+    await release_session(db)
+
+    outcome = await narrate(facts, provider=provider, taxonomy=taxonomy)
 
     return _to_response(
         schedule=schedule,
         facts_evidence={row.evidence_id: row for row in facts.evidence},
         outcome_status=outcome.status,
         reason=outcome.reason,
-        provider=provider.name,
+        provider=provider_name(provider),
         overview=outcome.narrative.overview if outcome.narrative else None,
         weeks_by_number=(
             {week.week: week for week in outcome.narrative.weeks} if outcome.narrative else {}
