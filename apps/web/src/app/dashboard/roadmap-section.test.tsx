@@ -17,7 +17,7 @@ const { getRoadmap, listSavedJobs } = await import("@/lib/api-client");
 function roadmap(overrides: Partial<RoadmapResponse> = {}): RoadmapResponse {
   return {
     formula_version: "roadmap_priority_v1",
-    schedule_version: "roadmap_schedule_v1",
+    schedule_version: "roadmap_schedule_v2",
     narrative_schema_version: "roadmap_narrative_v1",
     narrative_status: "generated",
     reason: null,
@@ -28,7 +28,10 @@ function roadmap(overrides: Partial<RoadmapResponse> = {}): RoadmapResponse {
     duration_days: 28,
     hours_per_day: 1,
     total_hours: 28,
-    overview: "A four-phase plan.",
+    scheduled_days: 28,
+    unscheduled_days: 0,
+    coverage: "full",
+    overview: "A plan for the days ahead.",
     weeks: [
       {
         week: 1,
@@ -62,6 +65,28 @@ function roadmap(overrides: Partial<RoadmapResponse> = {}): RoadmapResponse {
             ],
             evidence: [],
             estimated_hours: 4,
+            steps: [
+              {
+                step_id: "skill-1:1",
+                phase: "learn",
+                start_day: 1,
+                end_day: 2,
+                week: 1,
+                estimated_hours: 2,
+                task: "Read how identity and access are modelled, and write one policy by hand.",
+                done_when: "You can explain what that policy grants.",
+              },
+              {
+                step_id: "skill-1:2",
+                phase: "build",
+                start_day: 3,
+                end_day: 4,
+                week: 1,
+                estimated_hours: 2,
+                task: "Deploy one small service of your own and lock its access down.",
+                done_when: "The service answers on a URL you can share.",
+              },
+            ],
             task: "Deploy a small service to AWS and document it.",
             outcome: "A running service and a README.",
             success_criteria: "Someone else can follow your write-up.",
@@ -230,6 +255,113 @@ describe("RoadmapSection", () => {
     expect(
       await screen.findByText(/have not saved any jobs yet/),
     ).toBeInTheDocument();
+  });
+
+  // --- 6.4b: the day-by-day view ---------------------------------------
+
+  it("shows each step with its phase, its days and what to do", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    // The deterministic half: the mode and the days, rendered without
+    // trusting a generated word.
+    expect(await screen.findByText("Learn")).toBeInTheDocument();
+    expect(screen.getByText("Build")).toBeInTheDocument();
+    expect(screen.getByText(/Days 1–2/)).toBeInTheDocument();
+    // The written half: what to actually do, and the finish line.
+    expect(
+      screen.getByText(/Read how identity and access are modelled/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Done when: The service answers on a URL/),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the steps when the wording was rejected", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(
+      roadmap({
+        narrative_status: "rejected",
+        reason: "contradicts_facts",
+        overview: null,
+        weeks: roadmap().weeks.map((week) => ({
+          ...week,
+          focus: null,
+          checkpoint: null,
+          items: week.items.map((item) => ({
+            ...item,
+            task: null,
+            outcome: null,
+            success_criteria: null,
+            steps: item.steps.map((step) => ({
+              ...step,
+              task: null,
+              done_when: null,
+            })),
+          })),
+        })),
+      }),
+    );
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(
+      await screen.findByText(/disagreed with the plan CareerLens calculated/),
+    ).toBeInTheDocument();
+    // The schedule is deterministic, so it survives whole.
+    expect(screen.getByText("Learn")).toBeInTheDocument();
+    expect(screen.getByText("Build")).toBeInTheDocument();
+    expect(screen.getByText(/Days 3–4/)).toBeInTheDocument();
+  });
+
+  it("states unscheduled days rather than padding the plan", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(
+      roadmap({
+        duration_days: 56,
+        total_hours: 56,
+        scheduled_days: 28,
+        unscheduled_days: 28,
+        coverage: "partial",
+      }),
+    );
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    expect(
+      await screen.findByText(/justify 28 days of focused work/),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about coverage when the plan fills the window", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    await screen.findByText("AWS");
+    expect(screen.queryByText(/left unscheduled/)).not.toBeInTheDocument();
+  });
+
+  it("accepts a two-day plan", async () => {
+    vi.mocked(getRoadmap).mockResolvedValue(roadmap());
+    render(<RoadmapSection accessToken="token" />);
+
+    const days = screen.getByLabelText(/days available/i);
+    expect(days).toHaveAttribute("min", "2");
+
+    fireEvent.change(days, { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    await waitFor(() =>
+      expect(getRoadmap).toHaveBeenCalledWith("token", {
+        topN: 5,
+        durationDays: 2,
+        hoursPerDay: 1,
+      }),
+    );
   });
 
   it("passes the chosen top-n and time to the API", async () => {

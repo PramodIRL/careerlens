@@ -1,4 +1,4 @@
-.PHONY: help format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill evaluate-retrieval evaluate-check evaluate-baseline sample-resumes demo-github smoke
+.PHONY: help llm-pull llm-smoke format format-check lint typecheck test start start-web start-api start-worker services-up stop services-down migrate migration migrate-status requeue-stuck-resumes seed-skills github-skills embeddings-backfill evaluate-retrieval evaluate-check evaluate-baseline sample-resumes demo-github smoke
 
 help:
 	@echo "CareerLens — available commands:"
@@ -24,6 +24,8 @@ help:
 	@echo "  make evaluate-baseline    Re-baseline (commit in the SAME PR as the change)"
 	@echo "  make sample-resumes Write the fictional demo resumes to apps/api/var/samples/"
 	@echo "  make demo-github EMAIL=...  Import the fictional GitHub account for one user"
+	@echo "  make llm-pull       Download the local mentor model (one-off, ~4.7 GB)"
+	@echo "  make llm-smoke      Check the local model end to end (skips if not running)"
 	@echo "  make smoke          Run the end-to-end developer smoke test"
 
 format:
@@ -165,6 +167,22 @@ ifndef EMAIL
 	$(error EMAIL is required, e.g. make demo-github EMAIL=ada.sample@example.com)
 endif
 	cd apps/api && uv run python -m scripts.demo_github_import --email "$(EMAIL)"
+
+# Downloads the open-weight model the mentor features generate with
+# (Prompt 6.4). ONE-OFF, ~4.7 GB, cached by Ollama afterwards. There is
+# no API key and no account: inference runs on this machine, so nothing
+# here costs anything per request and no candidate data leaves the host.
+# Requires Ollama on the HOST — not in Docker, which on macOS cannot
+# reach Metal and would fall back to CPU.
+llm-pull:
+	ollama pull $${EXPLANATION_MODEL:-qwen2.5:7b-instruct}
+
+# Proves the real model produces output the existing grounding validator
+# accepts. SKIPS cleanly when Ollama is not running or the model is not
+# pulled — the same way the embedding tests skip without their model.
+# Not part of `make test` and not run in CI.
+llm-smoke:
+	cd apps/api && uv run pytest tests/test_llm_provider_live.py -v
 
 smoke:
 	./scripts/smoke.sh

@@ -18,7 +18,7 @@ but because there is nowhere for it to have come from.
 import uuid
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 SCHEMA_VERSION = "match_explanation_v1"
 
@@ -142,6 +142,68 @@ class SemanticFacts(BaseModel):
     hits: list[SemanticHitFact] = []
 
 
+class VerdictFacts(BaseModel):
+    """WHAT CAREERLENS DECIDED, said once and unambiguously (6.4b).
+
+    DERIVED, NEVER SUPPLIED. `ExplanationFacts.verdict` is a COMPUTED
+    field, not a stored one: every list here is a projection of
+    `matched_skills`, `missing_required_skills` and
+    `missing_other_skills`, grouped by the two axes the model kept
+    confusing. No caller can pass one in, so no caller can pass one that
+    disagrees with the skills it claims to summarise — the class of bug
+    this whole block exists to catch is not one it can introduce.
+
+    WHY IT EXISTS AT ALL, when the same information is already in the
+    facts. It was in the facts and only in the facts — nested, two
+    levels down, in the DATA block — while the instruction block carried
+    one flat list of skill names with no status on it. On a job with no
+    gaps a 7B model reached for that flat list to fill the "and here is
+    the gap" half of a summary, and produced "REST APIs is a required
+    skill you do not have" about a skill that was matched and merely
+    mentioned. This block is what app/explanation/prompt.py renders as a
+    per-request roster, so status travels at the same salience as the
+    names.
+
+    `has_any_gap` is the one the whole failure turned on. It is a
+    BOOLEAN rather than something to infer from three empty lists,
+    because "notice that all of these are empty" is exactly the
+    inference that went wrong.
+    """
+
+    model_config = _FROZEN
+
+    required_matched: list[str] = []
+    preferred_matched: list[str] = []
+    mentioned_matched: list[str] = []
+    required_missing: list[str] = []
+    preferred_missing: list[str] = []
+    mentioned_missing: list[str] = []
+    # True when ANY of the three missing lists holds a skill, or the
+    # gap report named one. Never inferred, always stated.
+    has_any_gap: bool = False
+
+    def gap_names(self) -> frozenset[str]:
+        """Every skill it is TRUE to call a gap."""
+        return frozenset(self.required_missing + self.preferred_missing + self.mentioned_missing)
+
+    def matched_names(self) -> frozenset[str]:
+        """Every skill it is FALSE to call missing."""
+        return frozenset(self.required_matched + self.preferred_matched + self.mentioned_matched)
+
+    def required_names(self) -> frozenset[str]:
+        """Every skill it is TRUE to call required."""
+        return frozenset(self.required_matched + self.required_missing)
+
+    def non_required_names(self) -> frozenset[str]:
+        """Every skill it is FALSE to call required."""
+        return frozenset(
+            self.preferred_matched
+            + self.mentioned_matched
+            + self.preferred_missing
+            + self.mentioned_missing
+        )
+
+
 class JobFacts(BaseModel):
     """Stored job metadata. `description` is deliberately absent."""
 
@@ -165,6 +227,64 @@ class ExplanationFacts(BaseModel):
     gaps: GapFacts
     semantic: SemanticFacts
     evidence: list[EvidenceFact] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_computed(cls, data: object) -> object:
+        """Serialised facts must round-trip back into this model.
+
+        `verdict` is COMPUTED, so it appears in the JSON a provider
+        receives — and app/explanation/provider.py's mock parses that
+        JSON straight back into `ExplanationFacts` to render from. With
+        `extra="forbid"` and no field to land in, that parse fails.
+
+        Dropping the computed key on the way IN keeps dump-then-load an
+        identity without weakening `extra="forbid"` for anything a
+        caller could actually supply: a hand-passed `verdict` is
+        discarded and recomputed from the skills, which is the whole
+        guarantee `VerdictFacts` documents.
+        """
+        if isinstance(data, dict) and "verdict" in data:
+            return {key: value for key, value in data.items() if key != "verdict"}
+        return data
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def verdict(self) -> VerdictFacts:
+        """The decided status of every skill, one axis at a time.
+
+        COMPUTED, so it travels in the serialised facts AND is available
+        to the prompt and the validator without any of the three being
+        able to hold a different answer. See `VerdictFacts` for what the
+        6.4 browser test found when this information existed only in the
+        nested data.
+
+        `has_any_gap` reads `gaps` as well as the missing lists:
+        `skill_gap_v1` is the authority on what counts as a gap, and a
+        bucket it filled that `missing_skills` did not would otherwise
+        go unstated. `needs_confirmation` is deliberately NOT counted —
+        unreviewed evidence means the candidate may well have the skill,
+        which is the opposite of a gap.
+        """
+
+        def named(facts: list[SkillFact], level: str) -> list[str]:
+            return [fact.skill_name for fact in facts if fact.requirement_level == level]
+
+        return VerdictFacts(
+            required_matched=named(self.matched_skills, "required"),
+            preferred_matched=named(self.matched_skills, "preferred"),
+            mentioned_matched=named(self.matched_skills, "mentioned"),
+            required_missing=[fact.skill_name for fact in self.missing_required_skills],
+            preferred_missing=named(self.missing_other_skills, "preferred"),
+            mentioned_missing=named(self.missing_other_skills, "mentioned"),
+            has_any_gap=bool(
+                self.missing_required_skills
+                or self.missing_other_skills
+                or self.gaps.required_gaps
+                or self.gaps.preferred_gaps
+                or self.gaps.informational_gaps
+            ),
+        )
 
     def evidence_by_id(self) -> dict[uuid.UUID, EvidenceFact]:
         return {row.evidence_id: row for row in self.evidence}
@@ -216,10 +336,40 @@ class MatchExplanation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["match_explanation_v1"]
-    summary: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+    # THE SUMMARY IS TWO SLOTS, NOT ONE (Prompt 6.4b), and that is a
+    # structural fix rather than a stylistic one.
+    #
+    # A summary is "where you stand" followed by "and here is the gap".
+    # As ONE free-text field, the second half is always available to be
+    # written — so on a job with no gaps at all a 7B model wrote one
+    # anyway, inventing a required-and-missing skill out of a matched
+    # one. No instruction removes that slot, because the slot is the
+    # whole field.
+    #
+    # Split, the gap half can be PINNED TO NULL in the decoder when the
+    # facts contain no gap (see app/explanation/ollama_provider.py), and
+    # then the sentence is not something the model declined to write —
+    # it is something it could not have written. Same move as
+    # `strengths` with no evidence.
+    #
+    # The wire schema is unchanged: `summary` below rejoins them, and
+    # app/api/v1/saved_job.py reads that.
+    summary_fit: str = Field(min_length=1, max_length=MAX_SUMMARY_CHARS)
+    summary_gap: str | None = Field(default=None, max_length=MAX_SUMMARY_CHARS)
     strengths: list[ExplanationClaim] = Field(default=[], max_length=MAX_CLAIMS)
     gaps: list[ExplanationClaim] = Field(default=[], max_length=MAX_CLAIMS)
     next_steps: list[Annotated[str, Field(min_length=1, max_length=MAX_STEP_CHARS)]] = Field(
         default=[], max_length=MAX_STEPS
     )
     cited_evidence_ids: list[uuid.UUID] = []
+
+    @property
+    def summary(self) -> str:
+        """The two halves as one paragraph, which is what a reader sees.
+
+        A property rather than a field, so there is no third place the
+        summary could be stored and no way for it to disagree with the
+        halves the validator actually checked.
+        """
+        gap = (self.summary_gap or "").strip()
+        return f"{self.summary_fit.strip()} {gap}".strip() if gap else self.summary_fit.strip()

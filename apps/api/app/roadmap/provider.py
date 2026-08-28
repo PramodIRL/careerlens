@@ -16,7 +16,11 @@ value.
 import json
 
 from app.explanation.prompt import ExplanationRequest
-from app.explanation.provider import MOCK_PROVIDER_NAME, ExplanationProvider
+from app.explanation.provider import (
+    MOCK_PROVIDER_NAME,
+    OLLAMA_PROVIDER_NAME,
+    ExplanationProvider,
+)
 from app.roadmap.schema import SCHEMA_VERSION, RoadmapFacts
 from app.settings import Settings, get_settings
 
@@ -71,6 +75,31 @@ _CRITERIA_BY_STATE = {
     ),
 }
 
+# ONE LINE PER PHASE. The mock cannot exercise the interesting half of
+# 6.4b — choosing which sub-topics matter is exactly the judgement a
+# fake has none of — but it must produce a narrative the validator
+# accepts for every phase the ladder can emit, or a grounding rule that
+# is too strict would only fail in front of a user.
+_STEP_TASK_BY_PHASE = {
+    "learn": "Read up on how {skill} works, and write down the parts you could not explain yet.",
+    "practice": "Repeat a small {skill} exercise until it stops needing the documentation.",
+    "build": "Build one small working thing with {skill}, start to finish.",
+    "prove": "Get what you built with {skill} running somewhere else, and write down how.",
+    "self_check": "Answer, out loud, why you made each choice in your {skill} work.",
+    "demonstrate": "Point at the work you have already done with {skill} and show what it does.",
+    "document": "Write down where you have used {skill}, so the evidence can be reviewed.",
+}
+
+_STEP_DONE_BY_PHASE = {
+    "learn": "You can describe what {skill} does without looking it up.",
+    "practice": "You can repeat the exercise without stopping to check.",
+    "build": "The thing you built runs.",
+    "prove": "Somebody else could run it from your notes.",
+    "self_check": "You can answer without hedging.",
+    "demonstrate": "You can show working {skill} code you already wrote.",
+    "document": "The write-up is attached to your profile.",
+}
+
 _WEEK_FOCUS = "Working on {skills}"
 
 # Phrased as a capability rather than a task, because "did you finish
@@ -117,9 +146,16 @@ def _render(facts: RoadmapFacts) -> dict[str, object]:
         f"{plan.selected_job_count} selected jobs ask for most."
     )
 
+    # KEYED ON STEPS, NOT ITEM START DAYS. An item running days 1-14 is
+    # work in weeks 1 and 2, and `RoadmapFacts.week_numbers` says so —
+    # a mock keyed the old way would be rejected by `_check_weeks` for
+    # omitting the weeks its own facts declare.
     by_week: dict[int, list[str]] = {}
     for item in facts.items:
-        by_week.setdefault(item.week, []).append(item.skill_name)
+        for step in item.steps:
+            names = by_week.setdefault(step.week, [])
+            if item.skill_name not in names:
+                names.append(item.skill_name)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -145,6 +181,18 @@ def _render(facts: RoadmapFacts) -> dict[str, object]:
             }
             for item in facts.items
         ],
+        # ONE ENTRY PER SUPPLIED STEP, in schedule order. Same map
+        # discipline as the items: there is nowhere to put a block of
+        # days the scheduler did not decide on.
+        "steps": [
+            {
+                "step_id": step.step_id,
+                "task": _STEP_TASK_BY_PHASE[step.phase].format(skill=item.skill_name),
+                "done_when": _STEP_DONE_BY_PHASE[step.phase].format(skill=item.skill_name),
+            }
+            for item in facts.items
+            for step in item.steps
+        ],
     }
 
 
@@ -166,7 +214,12 @@ def get_roadmap_provider(settings: Settings | None = None) -> ExplanationProvide
     settings = settings or get_settings()
     if settings.explanation_provider == MOCK_PROVIDER_NAME:
         return MockRoadmapProvider()
+    if settings.explanation_provider == OLLAMA_PROVIDER_NAME:
+        # Lazy, for the same reason the explanation factory is.
+        from app.explanation.ollama_provider import OllamaRoadmapProvider
+
+        return OllamaRoadmapProvider(settings)
     raise ValueError(
         f"unknown explanation provider {settings.explanation_provider!r} "
-        f"(known providers: {MOCK_PROVIDER_NAME})"
+        f"(known providers: {MOCK_PROVIDER_NAME}, {OLLAMA_PROVIDER_NAME})"
     )

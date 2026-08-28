@@ -107,7 +107,27 @@ def _roadmap_response(client: TestClient, token: str, **params: Any) -> Any:
 
 
 def _items(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    return [item for week in payload["weeks"] for item in week["items"]]
+    """The DECIDED items, once each, in schedule order.
+
+    An item is nested under every week it really occupies (6.4b), so a
+    fortnight-long priority appears twice in the response — which is
+    what stops a week that holds work rendering as empty. These tests
+    are about the plan, not the layout, so the repeat is folded here.
+    Use `_steps` for the day-level view.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for week in payload["weeks"]:
+        for item in week["items"]:
+            seen.setdefault(item["item_id"], item)
+    return list(seen.values())
+
+
+def _steps(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every step in the plan, in day order."""
+    return sorted(
+        (step for week in payload["weeks"] for item in week["items"] for step in item["steps"]),
+        key=lambda step: step["start_day"],
+    )
 
 
 def _names(payload: dict[str, Any]) -> list[str]:
@@ -288,9 +308,14 @@ def test_time_changes_depth_not_the_top_item(client: TestClient) -> None:
     assert len(generous["weeks"]) == 8
 
 
-def test_the_plan_covers_the_requested_days_exactly(client: TestClient) -> None:
-    """A 30-day plan really occupies 30 days: contiguous spans, no
-    overflow past the window and no unclaimed tail."""
+def test_the_plan_covers_the_scheduled_days_exactly(client: TestClient) -> None:
+    """The plan really occupies the days it claims: contiguous spans, no
+    overflow past the window and no unclaimed tail inside it.
+
+    `scheduled_days` rather than `duration_days` since 6.4b: no single
+    skill may run past a fortnight, so a short list of gaps leaves an
+    honest remainder rather than being stretched to fill the window.
+    """
     _seed_taxonomy()
     token, _ = _new_user(client)
     _create_job(client, token, _AWS_JOB)
@@ -300,11 +325,23 @@ def test_the_plan_covers_the_requested_days_exactly(client: TestClient) -> None:
     items = _items(payload)
 
     assert items[0]["start_day"] == 1
-    assert items[-1]["end_day"] == 30
+    assert items[-1]["end_day"] == payload["scheduled_days"]
     for earlier, later in zip(items, items[1:], strict=False):
         assert later["start_day"] == earlier["end_day"] + 1
-    estimated = sum(item["estimated_hours"] for item in items)
-    assert estimated == pytest.approx(payload["total_hours"], abs=0.5)
+
+    # And the STEPS tile the same window, with nothing overlapping and
+    # nothing beyond it.
+    steps = _steps(payload)
+    assert steps[0]["start_day"] == 1
+    assert steps[-1]["end_day"] == payload["scheduled_days"]
+    for earlier, later in zip(steps, steps[1:], strict=False):
+        assert later["start_day"] == earlier["end_day"] + 1
+    assert all(step["end_day"] <= payload["duration_days"] for step in steps)
+
+    # NEVER MORE WORK THAN THE CANDIDATE DECLARED. The bound holds over
+    # steps, which is where the hours now live.
+    assert sum(step["estimated_hours"] for step in steps) <= payload["total_hours"] + 0.5
+    assert payload["scheduled_days"] + payload["unscheduled_days"] == payload["duration_days"]
 
 
 def test_every_week_of_the_window_is_rendered(client: TestClient) -> None:
@@ -612,3 +649,254 @@ def test_the_roadmap_is_scoped_to_the_caller(client: TestClient) -> None:
 
     assert payload["has_selected_jobs"] is False
     assert "OwnerCo" not in json.dumps(payload)
+
+
+# =====================================================================
+# 6.4b — day-level steps, honest coverage, and short plans
+# =====================================================================
+
+
+def test_a_two_day_plan_is_accepted(client: TestClient) -> None:
+    """An interview on Thursday is a legitimate plan. The floor was a
+    week only because the plan used to be laid out in weeks; it is laid
+    out in days now, and weeks are a presentation grouping."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    payload = _roadmap(client, token, duration_days=2, hours_per_day=2)
+
+    assert payload["duration_days"] == 2
+    assert _items(payload)
+    assert _steps(payload)
+
+
+def test_a_one_day_plan_is_refused(client: TestClient) -> None:
+    """A plan with no second day is a task list — there is nothing to
+    sequence."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    assert _roadmap_response(client, token, duration_days=1).status_code == 422
+    assert _roadmap_response(client, token, duration_days=0).status_code == 422
+    assert _roadmap_response(client, token, duration_days=57).status_code == 422
+
+
+@pytest.mark.parametrize(("duration_days", "weeks"), [(2, 1), (3, 1), (5, 1), (7, 1), (9, 2)])
+def test_a_short_plan_does_not_assume_four_weeks(
+    client: TestClient, duration_days: int, weeks: int
+) -> None:
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    payload = _roadmap(client, token, duration_days=duration_days, hours_per_day=2)
+
+    assert len(payload["weeks"]) == weeks
+    assert payload["weeks"][-1]["end_day"] == duration_days
+
+
+def test_work_reaches_every_week_it_really_occupies(client: TestClient) -> None:
+    """THE REPORTED FAILURE. Two items over 28 days used to render as
+    "Week 1: AWS", "Week 2: nothing", "Week 3: Kubernetes", "Week 4:
+    nothing" — while the candidate was in fact meant to be working
+    through weeks 2 and 4."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, "AWS is required. Kubernetes is required.")
+
+    payload = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert payload["coverage"] == "full"
+    for week in payload["weeks"]:
+        assert week["items"], f"week {week['week']} holds no work"
+        assert all(item["steps"] for item in week["items"])
+    # And a week only ever shows the steps that belong to it.
+    for week in payload["weeks"]:
+        for item in week["items"]:
+            assert all(step["week"] == week["week"] for step in item["steps"])
+            assert all(
+                week["start_day"] <= step["start_day"] <= step["end_day"] <= week["end_day"]
+                for step in item["steps"]
+            )
+
+
+def test_no_work_is_scheduled_outside_the_declared_window(client: TestClient) -> None:
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+    _create_job(client, token, _DOCKER_JOB)
+
+    for duration in (2, 5, 14, 28, 56):
+        payload = _roadmap(client, token, duration_days=duration, hours_per_day=1)
+        steps = _steps(payload)
+        assert steps
+        assert all(1 <= step["start_day"] <= step["end_day"] <= duration for step in steps)
+        assert sum(step["estimated_hours"] for step in steps) <= payload["total_hours"] + 0.5
+
+
+def test_a_priority_item_is_broken_into_educational_steps(client: TestClient) -> None:
+    """The mentoring half: an item is a skill, its steps are the days,
+    and each step says what to do and how you know you finished it."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, "AWS is required. Kubernetes is required.")
+
+    payload = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert payload["narrative_status"] == "generated", payload.get("reason")
+    steps = _steps(payload)
+    assert len(steps) > len(_items(payload))
+    for step in steps:
+        # The deterministic half is always present...
+        assert step["phase"]
+        assert step["estimated_hours"] > 0
+        # ...and the written half came back with it.
+        assert step["task"]
+        assert step["done_when"]
+
+
+def test_insufficient_material_is_reported_not_padded(client: TestClient) -> None:
+    """When the candidate's own jobs do not justify the window they
+    asked for, the remainder is stated rather than filled with invented
+    learning."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, "AWS is required.")
+
+    payload = _roadmap(client, token, duration_days=56, hours_per_day=1)
+
+    assert payload["coverage"] == "partial"
+    assert payload["unscheduled_days"] > 0
+    assert payload["scheduled_days"] + payload["unscheduled_days"] == 56
+    assert max(step["end_day"] for step in _steps(payload)) == payload["scheduled_days"]
+
+
+def test_the_steps_survive_a_rejected_narrative(client: TestClient) -> None:
+    """The days and the phases are deterministic, so a rejection costs
+    the wording and none of the schedule."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    class _BrokenProvider:
+        @property
+        def name(self) -> str:
+            return "mock"
+
+        async def complete(self, request: object) -> str:
+            return "{ not json"
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("app.api.v1.roadmap.get_roadmap_provider", lambda: _BrokenProvider())
+        payload = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert payload["narrative_status"] == "rejected"
+    steps = _steps(payload)
+    assert steps
+    for step in steps:
+        assert step["phase"] and step["estimated_hours"] > 0
+        assert step["task"] is None and step["done_when"] is None
+
+
+def test_a_narrative_inventing_a_step_is_rejected(client: TestClient) -> None:
+    """The model cannot add a block of days. Every step carries hours,
+    so an invented one is work outside the budget the candidate
+    declared."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    from app.roadmap.provider import MockRoadmapProvider
+
+    class _InventingProvider(MockRoadmapProvider):
+        def complete_sync(self, request: object) -> str:
+            payload = json.loads(super().complete_sync(request))
+            payload["steps"].append(
+                {
+                    "step_id": "not-a-real-step:9",
+                    "task": "Do something nobody scheduled.",
+                    "done_when": "Never.",
+                }
+            )
+            return json.dumps(payload)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("app.api.v1.roadmap.get_roadmap_provider", lambda: _InventingProvider())
+        payload = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert payload["narrative_status"] == "rejected"
+    assert payload["reason"] == "unknown_evidence_id"
+    # And the schedule is intact regardless.
+    assert _steps(payload)
+
+
+def test_a_narrative_dropping_a_step_is_rejected(client: TestClient) -> None:
+    """The quieter failure: a hole in the calendar the UI would render
+    as a day with nothing in it."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    from app.roadmap.provider import MockRoadmapProvider
+
+    class _DroppingProvider(MockRoadmapProvider):
+        def complete_sync(self, request: object) -> str:
+            payload = json.loads(super().complete_sync(request))
+            payload["steps"].pop()
+            return json.dumps(payload)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("app.api.v1.roadmap.get_roadmap_provider", lambda: _DroppingProvider())
+        payload = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert payload["narrative_status"] == "rejected"
+    assert payload["reason"] == "ungrounded_claim"
+
+
+def test_the_narrative_cannot_change_the_deterministic_priority(client: TestClient) -> None:
+    """THE BOUNDARY. The narrative is a MAP keyed by decided ids, so
+    reordering it changes nothing: the plan comes back in
+    `roadmap_priority_v1`'s order either way."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+    _create_job(client, token, _DOCKER_JOB)
+
+    from app.roadmap.provider import MockRoadmapProvider
+
+    class _ReorderingProvider(MockRoadmapProvider):
+        def complete_sync(self, request: object) -> str:
+            payload = json.loads(super().complete_sync(request))
+            payload["items"].reverse()
+            payload["steps"].reverse()
+            return json.dumps(payload)
+
+    straight = _roadmap(client, token, duration_days=28, hours_per_day=2)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("app.api.v1.roadmap.get_roadmap_provider", lambda: _ReorderingProvider())
+        shuffled = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert shuffled["narrative_status"] == "generated"
+    assert _names(shuffled) == _names(straight)
+    assert [item["score"] for item in _items(shuffled)] == [
+        item["score"] for item in _items(straight)
+    ]
+    assert [step["step_id"] for step in _steps(shuffled)] == [
+        step["step_id"] for step in _steps(straight)
+    ]
+
+
+def test_a_matched_skill_never_becomes_a_step(client: TestClient) -> None:
+    """A skill the candidate satisfies with reviewed evidence produces
+    no demand, so it reaches neither the item list nor the calendar."""
+    _seed_taxonomy()
+    token, user_id = _new_user(client)
+    _create_job(client, token, "AWS is required. Docker is required.")
+    _give_skill(user_id, "AWS", "confirmed")
+
+    payload = _roadmap(client, token, duration_days=28, hours_per_day=2)
+
+    assert "AWS" not in _names(payload)
+    assert all(not step["step_id"].startswith("AWS") for step in _steps(payload))

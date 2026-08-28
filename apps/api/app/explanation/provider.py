@@ -30,6 +30,11 @@ from app.settings import Settings, get_settings
 
 MOCK_PROVIDER_NAME = "mock"
 
+# Declared here rather than imported from the ollama module, so the
+# factory can name it in an error without importing the provider it is
+# refusing to build.
+OLLAMA_PROVIDER_NAME = "ollama"
+
 
 # --------------------------------------------------------------------
 # Provider failures (Prompt 6.2)
@@ -141,16 +146,25 @@ def _level_phrase(facts: list[SkillFact]) -> str:
 def _render(facts: ExplanationFacts) -> dict[str, object]:
     score = facts.score
     if score.has_requirements:
-        summary = (
+        summary_fit = (
             f"{facts.job.company} — {facts.job.title}: {score.formula_version} scored this "
             f"match {score.overall_score}, with {score.required_matched} of "
             f"{score.required_total} required skills matched."
         )
     else:
-        summary = (
+        summary_fit = (
             f"{facts.job.company} — {facts.job.title}: no skill requirements were "
             f"recognised in this posting, so {score.formula_version} has nothing to score."
         )
+
+    # THE GAP HALF IS None WHEN THERE IS NO GAP. The mock has to obey
+    # the same rule the real provider is pinned to, or the one path that
+    # runs on every test would never exercise it.
+    summary_gap = (
+        "The skills this posting asks for that your profile does not show are listed below."
+        if facts.verdict.has_any_gap
+        else None
+    )
 
     # ONE STRENGTH NAMING THE SKILLS TOGETHER, not one repetitive claim
     # per skill. The earlier shape emitted "Your stored evidence covers
@@ -212,10 +226,18 @@ def _render(facts: ExplanationFacts) -> dict[str, object]:
     if not next_steps:
         next_steps.append("Keep your profile evidence up to date.")
 
+    # NO GAP MEANS NO GAP CLAIMS, mirroring what the real provider's
+    # schema is pinned to when `has_any_gap` is false. The only entry
+    # this can drop is the unreviewed-evidence note, which is not a
+    # missing skill and belongs in `next_steps` — where it already is.
+    if not facts.verdict.has_any_gap:
+        gaps = []
+
     cited_ids = sorted({evidence_id for fact in cited[:5] for evidence_id in _ids([fact])})
     return {
         "schema_version": SCHEMA_VERSION,
-        "summary": summary,
+        "summary_fit": summary_fit,
+        "summary_gap": summary_gap,
         "strengths": strengths,
         "gaps": gaps[:5],
         "next_steps": next_steps[:5],
@@ -234,7 +256,15 @@ def get_explanation_provider(settings: Settings | None = None) -> ExplanationPro
     settings = settings or get_settings()
     if settings.explanation_provider == MOCK_PROVIDER_NAME:
         return MockExplanationProvider()
+    if settings.explanation_provider == OLLAMA_PROVIDER_NAME:
+        # Imported HERE, not at module scope. `httpx` is cheap, but the
+        # rule is the one app/embeddings/provider.py already follows for
+        # `fastembed`: nothing that only uses the mock — the entire unit
+        # suite included — should load a module it will never call.
+        from app.explanation.ollama_provider import OllamaExplanationProvider
+
+        return OllamaExplanationProvider(settings)
     raise ValueError(
         f"unknown explanation provider {settings.explanation_provider!r} "
-        f"(known providers: {MOCK_PROVIDER_NAME})"
+        f"(known providers: {MOCK_PROVIDER_NAME}, {OLLAMA_PROVIDER_NAME})"
     )

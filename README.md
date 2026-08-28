@@ -338,6 +338,69 @@ later semantic-retrieval slice needs.
 cd apps/api && uv run pytest tests/test_embeddings.py tests/test_embedding_store.py
 ```
 
+## Mentor model (local inference)
+
+The match explanations and the roadmap's task wording are written by a
+**real open-weight model running on your own machine**. Everything else
+— scores, matched and missing skills, eligibility, job priority, Top-N,
+roadmap items, their order, their day spans, affected jobs and every
+`why` sentence — is deterministic and never touches a model.
+
+**No API key, no account, no per-request charge, and no candidate data
+leaves the host.** There is no LLM credential in this product and no
+variable name for one. That is a product requirement, not a default:
+a user of CareerLens cannot be billed for AI usage because nothing is
+ever billed.
+
+**The product works fully without it.** With `EXPLANATION_PROVIDER=mock`
+the dashboard shows every score, gap and roadmap item exactly as it
+otherwise would; what is lost is the mentoring prose and nothing else.
+That is why the LLM sits at the end of the pipeline rather than inside
+it — a model that is slow, missing or wrong can never cost a user their
+results.
+
+### Setup
+
+```bash
+brew install ollama && ollama serve   # a HOST process, not Docker
+make llm-pull                          # one-off, ~4.7 GB
+```
+
+Then set `EXPLANATION_PROVIDER=ollama` in `.env` and restart the API.
+Ollama must run on the host: Docker Desktop on macOS cannot reach Metal,
+so a containerised daemon falls back to CPU and is several times slower.
+
+### Model and hardware
+
+| | Model | RAM while loaded | Roadmap latency (M2 Pro) |
+| --- | --- | --- | --- |
+| Default | `qwen2.5:7b-instruct` | ~6 GB | ~60-90s |
+| If too slow | `qwen2.5:3b-instruct` | ~3 GB | ~25-35s |
+
+Apache 2.0 weights. Switching is one line of `.env` —
+`EXPLANATION_MODEL` — and no code change. **A roadmap takes a minute or
+so to write**; that is the honest cost of running a model locally
+instead of paying per request, and `EXPLANATION_TIMEOUT_SECONDS` is set
+to 180 accordingly.
+
+### Grounding is unchanged
+
+A more capable writer gets more freedom over *wording* and none at all
+over facts. The validators in `app/explanation/validate.py` and
+`app/roadmap/validate.py` still reject any answer that cites unknown
+evidence, states a number absent from the facts, names a skill outside
+the plan, or — for the roadmap — returns anything but exactly the item
+ids and weeks the deterministic scheduler produced. A rejection costs
+the prose and none of the substance.
+
+Expect the real model to be rejected more often than the mock was: the
+mock was written to pass. That is a prompt-tuning problem, and the
+`reason` on the response says which rule was broken.
+
+```bash
+make llm-smoke   # skips cleanly when Ollama is not running
+```
+
 ## Retrieval evaluation and regression policy
 
 Semantic retrieval is graded against a **developer-authored synthetic

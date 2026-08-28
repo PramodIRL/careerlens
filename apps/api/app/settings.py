@@ -177,12 +177,44 @@ class Settings(BaseSettings):
     # it is the one failure this feature cannot afford.
     explanation_provider: str = "mock"
 
+    # --- Local LLM inference (Prompt 6.4) ----------------------------
+    # THERE IS NO LLM CREDENTIAL HERE AND NO VARIABLE NAME FOR ONE.
+    # Inference runs against an Ollama daemon on this machine: open
+    # weights, no hosted API, no account, no per-request meter. A user
+    # of this product cannot be billed for AI usage because nothing is
+    # ever billed.
+    #
+    # Where the daemon listens. Localhost by default, so nothing leaves
+    # the host — candidate resume and README excerpts reach a process on
+    # the same machine and go no further.
+    ollama_base_url: str = "http://localhost:11434"
+    # Which model to generate with. Configurable precisely so the
+    # size/latency trade-off is a deployment decision rather than a code
+    # change: qwen2.5:3b-instruct roughly halves the wait at some cost
+    # in sequencing quality, and 14b goes the other way if the machine
+    # has the memory.
+    explanation_model: str = "qwen2.5:7b-instruct"
+    # Ceiling on generated tokens. A roadmap narrative is the large
+    # case: up to 12 items x 3 fields plus 8 weekly checkpoints.
+    explanation_max_output_tokens: int = 4096
+    # How long the daemon holds the weights resident after a request.
+    # Without this it evicts the model after a few minutes and the next
+    # user pays a multi-second reload on top of generation.
+    explanation_keep_alive: str = "30m"
+
     # Hard budget for ONE provider call, applied by the adapter rather
     # than trusted to a provider's own client (Prompt 6.2). A hung
     # request in the API's own request path is a stalled page for the
     # user and a held connection for the server, and neither becomes
     # acceptable because a model is slow.
-    explanation_timeout_seconds: float = 10.0
+    #
+    # 180 SECONDS, NOT 10. The old value was calibrated against a mock
+    # that returns instantly. A local 7B model generating a full roadmap
+    # narrative takes 60-90 seconds on an M2 Pro, so 10 would time out
+    # on essentially every real request — and because the deterministic
+    # plan still renders, it would fail QUIETLY, which is worse than
+    # failing loudly.
+    explanation_timeout_seconds: float = 180.0
     # Total provider calls, including the first. Only a TIMEOUT or an
     # UNAVAILABLE provider is retried — a response that arrived and
     # failed validation never is, because re-asking spends money to
@@ -192,7 +224,14 @@ class Settings(BaseSettings):
     # provider call, and this cap is the only thing bounding what that
     # costs. Worst-case wait is
     # attempts x timeout + (attempts - 1) x backoff.
-    explanation_max_attempts: int = 2
+    # ONE ATTEMPT BY DEFAULT, for local inference specifically. A retry
+    # of a 90-second generation doubles the user's wait, and the
+    # dominant local failure — "the daemon is not running" — is not
+    # something a second attempt fixes. This is CONFIGURATION, not a
+    # provider-specific code path: app/explanation/runtime.py is
+    # unchanged and remains the single retry authority, so raising this
+    # back to 2 for a fast or remote provider needs no code change.
+    explanation_max_attempts: int = 1
     # Fixed, not exponential. With two attempts an exponential schedule
     # is decoration.
     explanation_retry_backoff_seconds: float = 0.5

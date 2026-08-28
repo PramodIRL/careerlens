@@ -8,11 +8,12 @@ jobs are deleted — and unlike a stale number, a stale paragraph still
 reads like a fact.
 
 THE DETERMINISTIC HALF AND THE WRITTEN HALF ARE SEPARABLE, on purpose.
-`why`, `state`, `score`, `affected_jobs` and `phase` are computed by
-app/roadmap/priority.py; `task` and `success_criteria` come from a
-language model and are null when `narrative_status` is "rejected". A
-client can render the whole plan without either trusting or receiving a
-single generated word.
+`why`, `state`, `score`, `affected_jobs`, every day range and every
+step `phase` are computed by app/roadmap/priority.py; `task`,
+`done_when` and `success_criteria` come from a language model and are
+null when `narrative_status` is "rejected". A client can render the
+whole plan — including its day-by-day shape — without either trusting or
+receiving a single generated word.
 """
 
 import uuid
@@ -60,6 +61,55 @@ class RoadmapEvidenceResponse(BaseModel):
     excerpt: str | None = None
 
 
+class RoadmapStepPhase(StrEnum):
+    """The learning MODE of one block of days.
+
+    Decided by `roadmap_schedule_v2`, never by a model, so a client can
+    render the badge without trusting a generated word. The phase says
+    what KIND of work these days are for; what the work actually is, is
+    the model's contribution in `task` and `done_when`.
+    """
+
+    LEARN = "learn"
+    PRACTICE = "practice"
+    BUILD = "build"
+    PROVE = "prove"
+    SELF_CHECK = "self_check"
+    # Weak evidence gets its own rungs: the candidate may already have
+    # the skill, so the plan asks them to show it rather than learn it.
+    DEMONSTRATE = "demonstrate"
+    DOCUMENT = "document"
+
+
+class RoadmapStepResponse(BaseModel):
+    """One block of days inside an item — what to do, and by when.
+
+    THIS IS WHAT ANSWERS "WHAT SHOULD I DO TODAY". An item says which
+    skill and which fortnight; a step says which three days and which
+    part of it. Before 6.4b there were only items, so a fortnight-long
+    priority rendered as one instruction and three empty-looking weeks.
+
+    A STEP NEVER SPANS TWO WEEKS. The schedule splits on week boundaries
+    before it splits on length, so `week` is exact and a week's contents
+    are simply the steps whose week equals it.
+
+    `phase`, the days and `estimated_hours` are deterministic. `task`
+    and `done_when` come from the provider and are null when the
+    narrative was rejected — the days and the mode survive either way.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    step_id: str
+    phase: RoadmapStepPhase
+    start_day: int
+    end_day: int
+    week: int
+    estimated_hours: float = 0.0
+    task: str | None = None
+    done_when: str | None = None
+
+
 class RoadmapItemResponse(BaseModel):
     """One thing to work on, with everything needed to justify it.
 
@@ -94,6 +144,10 @@ class RoadmapItemResponse(BaseModel):
     affected_jobs: list[RoadmapAffectedJobResponse] = []
     evidence: list[RoadmapEvidenceResponse] = []
     estimated_hours: float = 0.0
+    # The day-level decomposition. When an item is nested under a WEEK,
+    # this carries only the steps falling in that week, so a fortnight
+    # of work shows up in both weeks it really occupies.
+    steps: list[RoadmapStepResponse] = []
     # Written by the provider, null when the narrative was rejected.
     # WHAT TO DO / WHAT YOU END UP WITH / WHAT YOU SHOULD BE ABLE TO DO.
     # `outcome` is an artefact, `success_criteria` a capability: "a
@@ -130,7 +184,7 @@ class RoadmapWeekResponse(BaseModel):
 
 
 class RoadmapResponse(BaseModel):
-    """The candidate's current four-phase roadmap.
+    """The candidate's current learning roadmap.
 
     ONE COMBINED PLAN, not one per job. It answers "what should I work
     on next, given everything I have saved", and an item routinely cites
@@ -169,5 +223,17 @@ class RoadmapResponse(BaseModel):
     # duration_days x hours_per_day. An input-derived budget, not a
     # prediction of how long anything takes.
     total_hours: float
+    # HOW MUCH OF THE WINDOW THE PLAN ACTUALLY FILLS (Prompt 6.4b).
+    # Deterministic, and stated rather than hidden: no single skill may
+    # occupy more than a fortnight, so a candidate with two gaps who asks
+    # for eight weeks gets four honest weeks and is told the rest is
+    # unscheduled. The alternative was stretching one skill across a
+    # month, which is the arithmetic running out of material and padding
+    # with time. A client must present `unscheduled_days` as "your saved
+    # jobs did not justify filling this", never as a failure.
+    scheduled_days: int = 0
+    unscheduled_days: int = 0
+    # "full" | "partial"
+    coverage: str = "full"
     overview: str | None = None
     weeks: list[RoadmapWeekResponse] = []

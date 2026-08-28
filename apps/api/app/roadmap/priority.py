@@ -130,9 +130,166 @@ MAX_ITEMS = 12
 # FORMULA_VERSION on purpose: how the plan is laid out across days can
 # evolve without implying the priorities moved, and conflating the two
 # would make every layout tweak look like a re-ranking.
-SCHEDULE_VERSION = "roadmap_schedule_v1"
+#
+# v2 (Prompt 6.4b) splits each item into day-level STEPS and caps how
+# many days one item may occupy. The priorities are byte-identical; only
+# the calendar changed, which is exactly what a separate version is for.
+SCHEDULE_VERSION = "roadmap_schedule_v2"
 
 DAYS_PER_WEEK = 7
+
+# THE LONGEST ONE SKILL MAY OCCUPY. A PLANNING ASSUMPTION, NOT A
+# MEASUREMENT — the same kind of judgement HOURS_PER_ITEM is, and it
+# must never be presented as though CareerLens knew how long learning
+# anything takes.
+#
+# It exists because the previous behaviour divided the whole window
+# across however many items survived, so two gaps over eight weeks
+# became two four-week blocks. Four weeks on one skill is not a plan a
+# mentor would write; it is the arithmetic running out of material and
+# padding with time. Two weeks is where a focused push on a single skill
+# stops being focused.
+#
+# WHEN THE MATERIAL RUNS OUT, THE PLAN SAYS SO. The days beyond what the
+# items can carry are reported as `unscheduled_days` rather than
+# absorbed, because inventing learning requirements to fill a window the
+# candidate's own jobs did not justify is exactly the fabrication this
+# product refuses everywhere else.
+MAX_DAYS_PER_ITEM = 14
+
+# The target length of ONE step, in days. Also a planning assumption.
+# Three days is short enough that "what should I do today" has an
+# answer and long enough that a step is a piece of work rather than a
+# checkbox.
+DAYS_PER_STEP = 3
+
+
+class StepPhase(StrEnum):
+    """The learning MODE of one step. Deterministic, never model-chosen.
+
+    THE LADDER IS THE BOUNDARY, NOT THE LESSON. A phase says what kind
+    of work belongs in these days — take something in, practise it,
+    build with it, produce the artefact, test yourself — and stops
+    there. WHICH concepts, WHICH exercise, WHAT gets built and WHICH
+    questions are the mentoring judgement, and that is the model's to
+    make inside the boundary (see app/roadmap/prompt.py).
+
+    Deciding the mode here rather than in the prompt buys three things:
+    the UI can render the phase badge without trusting a model, the
+    sequence cannot be reordered or invented, and the weak-evidence rule
+    below is enforced by code rather than by a sentence a model may skip.
+    """
+
+    LEARN = "learn"
+    PRACTICE = "practice"
+    BUILD = "build"
+    PROVE = "prove"
+    SELF_CHECK = "self_check"
+    # WEAK EVIDENCE GETS ITS OWN RUNGS. The candidate may already have
+    # the skill and only lacks reviewed evidence for it, so a ladder
+    # starting at LEARN would tell them to learn something they can
+    # already do. Same distinction GapState draws, carried through to
+    # the calendar.
+    DEMONSTRATE = "demonstrate"
+    DOCUMENT = "document"
+
+
+# WHICH RUNGS, FOR A GIVEN NUMBER OF STEPS. Indexed by `n - 1`, so a
+# lookup returns exactly `n` phases and the table's own length is the
+# ceiling on how many steps that state can hold.
+#
+# AN EXPLICIT TABLE, NOT AN ALGORITHM. A subsequence rule that "drops
+# from the middle" is three lines shorter and impossible to check by
+# eye; this can be read straight down. The shapes are the product
+# judgement and belong somewhere a reader can disagree with them.
+#
+# Note what a ONE-step missing item gets: BUILD, not LEARN. With a
+# single block of days the honest instruction is to build something
+# small with the skill, because "spend your only day reading" produces
+# nothing anybody can look at afterwards.
+_PHASE_PLAN: dict[GapState, tuple[tuple[StepPhase, ...], ...]] = {
+    GapState.MISSING_REQUIRED: (
+        (StepPhase.BUILD,),
+        (StepPhase.LEARN, StepPhase.BUILD),
+        (StepPhase.LEARN, StepPhase.BUILD, StepPhase.PROVE),
+        (StepPhase.LEARN, StepPhase.PRACTICE, StepPhase.BUILD, StepPhase.PROVE),
+        (
+            StepPhase.LEARN,
+            StepPhase.PRACTICE,
+            StepPhase.BUILD,
+            StepPhase.PROVE,
+            StepPhase.SELF_CHECK,
+        ),
+    ),
+    GapState.MISSING_PREFERRED: (
+        (StepPhase.BUILD,),
+        (StepPhase.LEARN, StepPhase.BUILD),
+        (StepPhase.LEARN, StepPhase.BUILD, StepPhase.PROVE),
+        (StepPhase.LEARN, StepPhase.PRACTICE, StepPhase.BUILD, StepPhase.PROVE),
+        (
+            StepPhase.LEARN,
+            StepPhase.PRACTICE,
+            StepPhase.BUILD,
+            StepPhase.PROVE,
+            StepPhase.SELF_CHECK,
+        ),
+    ),
+    # Three rungs, and the table's length is the cap: a skill that needs
+    # EVIDENCE rather than learning does not need five stages of it.
+    GapState.WEAK_EVIDENCE: (
+        (StepPhase.DOCUMENT,),
+        (StepPhase.DEMONSTRATE, StepPhase.DOCUMENT),
+        (StepPhase.DEMONSTRATE, StepPhase.DOCUMENT, StepPhase.PROVE),
+    ),
+}
+
+# The longest ladder in the table. Used as a bound where the state is
+# not yet known; the per-state length is what actually applies.
+MAX_STEPS_PER_ITEM = max(len(plans) for plans in _PHASE_PLAN.values())
+
+
+def phases_for(state: GapState, count: int) -> tuple[StepPhase, ...]:
+    """Exactly `count` phases for one item, or as many as the state has.
+
+    Raises on a count below one: a scheduled item always occupies at
+    least one day, so a zero-step item is a bug in the caller rather
+    than a case to paper over.
+    """
+    if count < 1:  # pragma: no cover - defensive; spans are >= 1 day
+        raise ValueError(f"an item needs at least one step, got {count}")
+    plans = _PHASE_PLAN[state]
+    return plans[min(count, len(plans)) - 1]
+
+
+def max_steps_for(state: GapState) -> int:
+    """How many steps this state's ladder can express."""
+    return len(_PHASE_PLAN[state])
+
+
+@dataclass
+class RoadmapStep:
+    """One block of days inside an item, with its learning mode.
+
+    EVERY FIELD HERE IS DETERMINISTIC. The days come from
+    `roadmap_schedule_v2`, the phase from the ladder above, the hours
+    from the candidate's own declared time. A model writes prose against
+    `step_id` and changes none of it.
+
+    A STEP NEVER STRADDLES A WEEK. `schedule_items` splits on week
+    boundaries before it splits on length, so `week` is exact rather
+    than approximated from a start day — which is what stopped a
+    fortnight-long item from being filed under its first week alone and
+    leaving the second looking empty.
+    """
+
+    step_id: str
+    phase: StepPhase
+    start_day: int
+    end_day: int
+    week: int
+    # An ESTIMATE, from the candidate's own declared hours. Never a
+    # claim about how long anything takes.
+    estimated_hours: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -185,6 +342,9 @@ class RoadmapItem:
     end_day: int = 0
     week: int = 0
     estimated_hours: float = 0.0
+    # The day-level decomposition, filled by `schedule_items`. Sums to
+    # this item's own span by construction.
+    steps: list[RoadmapStep] = field(default_factory=list)
 
     @property
     def item_id(self) -> str:
@@ -319,21 +479,143 @@ def week_count(duration_days: int) -> int:
     return -(-duration_days // DAYS_PER_WEEK)  # ceiling division
 
 
+@dataclass(frozen=True)
+class Schedule:
+    """A laid-out plan, and an honest statement of what it does not fill.
+
+    `unscheduled_days` is a DETERMINISTIC FACT, not an apology. When the
+    candidate's own saved jobs produce two gaps and they ask for eight
+    weeks, the material genuinely runs out — and the two available
+    answers are to stretch one skill across a month or to say so. This
+    says so, and app/api/v1/roadmap.py reports it beside the plan.
+    """
+
+    items: list["RoadmapItem"]
+    duration_days: int
+    scheduled_days: int
+    unscheduled_days: int
+
+    @property
+    def coverage(self) -> str:
+        """ "full" when the items fill the declared window, else
+        "partial". Derived rather than stored, so the two can never
+        disagree."""
+        return "full" if self.unscheduled_days == 0 else "partial"
+
+
+def _week_segments(start_day: int, end_day: int) -> list[tuple[int, int, int]]:
+    """Split a day range at WEEK boundaries. `(start, end, week)`.
+
+    THE REASON EVERY STEP HAS AN EXACT WEEK. Splitting here, before
+    length is considered, means no step can span a boundary — so a
+    week's contents are the steps whose week equals it, with no
+    overlap rule and no item filed under a week it only starts in.
+    That last case is the whole 6.4b defect: a fortnight-long item
+    reported week 1 and left week 2 rendering "nothing scheduled" while
+    the candidate was in fact meant to be working on it.
+    """
+    segments: list[tuple[int, int, int]] = []
+    cursor = start_day
+    while cursor <= end_day:
+        week = (cursor - 1) // DAYS_PER_WEEK + 1
+        segments.append((cursor, min(week * DAYS_PER_WEEK, end_day), week))
+        cursor = segments[-1][1] + 1
+    return segments
+
+
+def _step_counts(segments: list[tuple[int, int, int]], target: int) -> list[int]:
+    """How many steps each week-segment gets, summing to `target`.
+
+    Every segment starts with one — a week holding work always shows
+    work — and the remaining budget goes to whichever segment currently
+    has the most days per step. That is the "longest first" rule stated
+    as a ratio, which keeps step lengths even across uneven segments
+    instead of loading the first one.
+
+    A segment never gets more steps than it has days: a zero-day step
+    would be a row in the UI with no time attached to it.
+    """
+    counts = [1] * len(segments)
+    for _ in range(max(target - len(segments), 0)):
+        best: tuple[float, int] | None = None
+        for index, (start, end, _week) in enumerate(segments):
+            days = end - start + 1
+            if counts[index] >= days:
+                continue
+            ratio = days / counts[index]
+            # Strictly greater, so ties go to the EARLIER segment and
+            # the result is order-stable across identical requests.
+            if best is None or ratio > best[0]:
+                best = (ratio, index)
+        if best is None:
+            break
+        counts[best[1]] += 1
+    return counts
+
+
+def _build_steps(item: "RoadmapItem", *, hours_per_day: float) -> list[RoadmapStep]:
+    """Decompose one scheduled item into day-level steps.
+
+    THE DAYS TILE THE ITEM EXACTLY. Each segment is divided with the
+    same `divmod` the item layout uses, so the steps of an item sum to
+    its span, the items sum to the scheduled days, and the total
+    estimated hours cannot exceed `duration_days x hours_per_day`. The
+    bound is arithmetic, not a check somebody has to remember to run.
+
+    HOW MANY STEPS is a function of the span and the state's ladder, and
+    of nothing else — not of the model, and not of how much prose fits.
+    """
+    segments = _week_segments(item.start_day, item.end_day)
+    span = item.end_day - item.start_day + 1
+    target = max(
+        len(segments),
+        min(max_steps_for(item.state), max(round(span / DAYS_PER_STEP), 1)),
+    )
+    counts = _step_counts(segments, target)
+
+    steps: list[RoadmapStep] = []
+    phases = phases_for(item.state, sum(counts))
+    for (start, end, week), count in zip(segments, counts, strict=True):
+        base, extra = divmod(end - start + 1, count)
+        cursor = start
+        for index in range(count):
+            length = base + (1 if index < extra else 0)
+            steps.append(
+                RoadmapStep(
+                    step_id=f"{item.item_id}:{len(steps) + 1}",
+                    phase=phases[len(steps)],
+                    start_day=cursor,
+                    end_day=cursor + length - 1,
+                    week=week,
+                    estimated_hours=round(length * hours_per_day, 1),
+                )
+            )
+            cursor += length
+    return steps
+
+
 def schedule_items(
     items: list[RoadmapItem],
     *,
     duration_days: int,
     hours_per_day: float,
-) -> list[RoadmapItem]:
+) -> Schedule:
     """Trim to the budget and lay the survivors across the real calendar.
 
     DAYS ARE DISTRIBUTED, NOT HOURS, and that is what makes the window
-    exact: the spans are `divmod(duration_days, n)` so they sum to
-    `duration_days` by construction. There is no overflow past what the
-    candidate declared and no unclaimed tail, and `estimated_hours`
-    follows from the span rather than being computed separately and
-    hoped to agree. Dividing HOURS instead — the previous approach —
-    could round each item up past the window at low hours-per-day.
+    exact: the spans are `divmod(scheduled, n)` so they sum to
+    `scheduled` by construction. There is no overflow past what the
+    candidate declared, and `estimated_hours` follows from the span
+    rather than being computed separately and hoped to agree. Dividing
+    HOURS instead — the original approach — could round each item up
+    past the window at low hours-per-day.
+
+    NO ITEM MAY EXCEED `MAX_DAYS_PER_ITEM` (Prompt 6.4b). The days the
+    items cannot carry are left UNSCHEDULED and reported, rather than
+    divided into blocks nobody would call a plan. `base` is therefore
+    bounded by fourteen, and so is `base + 1`: a remainder exists only
+    when `scheduled` is short of `14 x n`, which is exactly when `base`
+    is at most thirteen.
 
     AN ITEM NEEDS AT LEAST ONE DAY, so the count is additionally bounded
     by `duration_days`. Without that a twelve-item budget over seven
@@ -345,14 +627,20 @@ def schedule_items(
 
     SCHEDULING DOES NOT RE-RANK. The order arriving here is
     `roadmap_priority_v1`'s and leaves untouched; this function only
-    decides where each item sits in the calendar.
+    decides where each item sits in the calendar and how it breaks down.
     """
     count = min(item_budget(duration_days * hours_per_day), duration_days)
     kept = items[:count]
     if not kept:
-        return []
+        return Schedule(
+            items=[],
+            duration_days=duration_days,
+            scheduled_days=0,
+            unscheduled_days=duration_days,
+        )
 
-    base, extra = divmod(duration_days, len(kept))
+    scheduled = min(duration_days, len(kept) * MAX_DAYS_PER_ITEM)
+    base, extra = divmod(scheduled, len(kept))
     cursor = 1
     for index, item in enumerate(kept):
         span = base + (1 if index < extra else 0)
@@ -363,5 +651,12 @@ def schedule_items(
         # It is the candidate's own declared time divided across the
         # plan, not a claim about how long learning anything takes.
         item.estimated_hours = round(span * hours_per_day, 1)
+        item.steps = _build_steps(item, hours_per_day=hours_per_day)
         cursor = item.end_day + 1
-    return kept
+
+    return Schedule(
+        items=kept,
+        duration_days=duration_days,
+        scheduled_days=scheduled,
+        unscheduled_days=duration_days - scheduled,
+    )

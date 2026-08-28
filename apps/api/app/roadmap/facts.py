@@ -39,7 +39,7 @@ from app.roadmap.priority import (
     SCHEDULE_VERSION,
     GapState,
     JobDemand,
-    RoadmapItem,
+    Schedule,
     SelectedJob,
     week_count,
 )
@@ -51,6 +51,7 @@ from app.roadmap.schema import (
     RoadmapItemFact,
     RoadmapJobFact,
     RoadmapPlanFacts,
+    RoadmapStepFact,
 )
 from app.schemas.saved_job import JobGapResponse, JobMatchResponse, RequirementLevelSchema
 
@@ -188,7 +189,7 @@ def _normalize_excerpt(excerpt: str | None) -> str | None:
 
 def build_facts(
     *,
-    items: list[RoadmapItem],
+    schedule: Schedule,
     selected: list[SelectedJob],
     evidence_by_skill: dict[uuid.UUID, list[SkillEvidence]],
     duration_days: int,
@@ -197,15 +198,15 @@ def build_facts(
 ) -> RoadmapFacts:
     """Everything the provider may see, and nothing else.
 
-    Built from the DECIDED plan: the items arrive ranked, phased and
-    explained, and this only serialises them. Nothing here can change an
-    order, and there is no field for a raw resume, a README or a job
-    description.
+    Built from the DECIDED plan: the items arrive ranked, phased,
+    scheduled, decomposed into steps and explained, and this only
+    serialises them. Nothing here can change an order, and there is no
+    field for a raw resume, a README or a job description.
     """
     catalogue: dict[uuid.UUID, RoadmapEvidenceFact] = {}
     item_facts: list[RoadmapItemFact] = []
 
-    for item in items:
+    for item in schedule.items:
         evidence_ids: list[uuid.UUID] = []
         for row in evidence_by_skill.get(item.skill_id, []):
             catalogue.setdefault(
@@ -233,6 +234,17 @@ def build_facts(
                 affected_job_ids=[job.saved_job_id for job in item.affected_jobs],
                 evidence_ids=evidence_ids,
                 estimated_hours=item.estimated_hours,
+                steps=[
+                    RoadmapStepFact(
+                        step_id=step.step_id,
+                        phase=step.phase.value,
+                        start_day=step.start_day,
+                        end_day=step.end_day,
+                        week=step.week,
+                        estimated_hours=step.estimated_hours,
+                    )
+                    for step in item.steps
+                ],
             )
         )
 
@@ -245,6 +257,13 @@ def build_facts(
             hours_per_day=hours_per_day,
             total_hours=total_hours,
             weeks=week_count(duration_days),
+            # FROM STEPS, NOT FROM ITEM START DAYS. An item running days
+            # 1-14 is work in weeks 1 and 2; keying off its start day
+            # left week 2 looking empty. See RoadmapFacts.week_numbers.
+            work_weeks=sorted({step.week for item in item_facts for step in item.steps}),
+            scheduled_days=schedule.scheduled_days,
+            unscheduled_days=schedule.unscheduled_days,
+            coverage=schedule.coverage,
         ),
         jobs=[
             RoadmapJobFact(
