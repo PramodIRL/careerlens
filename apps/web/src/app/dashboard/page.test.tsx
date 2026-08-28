@@ -396,53 +396,51 @@ describe("dashboard saved-job coordination", () => {
     updated_at: "2026-01-01T00:00:00Z",
   };
 
-  it("re-reads the saved-job count when a job is deleted", async () => {
+  it("lowers the roadmap's ceiling when a job is deleted", async () => {
+    // THE SAME GUARANTEE, WITHOUT THE SECOND REQUEST (7.2 F5). The
+    // roadmap's ceiling still has to come down when a job goes, and only
+    // the dashboard can tell it so — but the count now travels as a prop
+    // from the list JobsSection already holds, rather than through a
+    // refetch of an endpoint that was just read.
     listSavedJobsMock.mockResolvedValue([savedJob]);
     deleteSavedJobMock.mockResolvedValue(undefined);
 
     renderDashboard();
-    // Both sections read the collection on mount.
     await screen.findByText("Junior Backend Engineer");
-    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalled());
-    const readsBefore = listSavedJobsMock.mock.calls.length;
+    expect(await screen.findByText(/of 1 saved job/)).toBeInTheDocument();
 
-    // The roadmap's ceiling now has to come down, and only the dashboard
-    // can tell it so.
-    listSavedJobsMock.mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
 
-    await waitFor(() =>
-      expect(listSavedJobsMock.mock.calls.length).toBeGreaterThan(readsBefore),
-    );
+    expect(await screen.findByText(/of 0 saved jobs/)).toBeInTheDocument();
   }, 10000);
 
-  it("re-reads the roadmap's count only, not the job list as well", async () => {
-    // THE OTHER HALF. `jobsVersion` is deliberately kept out of
-    // JobsSection's own `refreshKey` (see page.tsx): it already applied
-    // the delete in place, so a refetch there would be a second request
-    // for data it holds. Both sections read the same endpoint, so the
-    // CALL COUNT is what tells them apart — two on mount, one more after
-    // the delete, never two more.
+  it("lists the saved jobs exactly once for the whole page", async () => {
+    // THE DUPLICATE THIS REPLACED. Two sections used to read the same
+    // endpoint on mount — JobsSection for the list it renders and
+    // RoadmapSection for its length — so the count was TWO, and a delete
+    // made it three. One section owns the request now and reports the
+    // number, so the correct count is ONE, and it stays one across the
+    // mutation that used to add a read.
     listSavedJobsMock.mockResolvedValue([savedJob]);
     deleteSavedJobMock.mockResolvedValue(undefined);
 
     renderDashboard();
     await screen.findByText("Junior Backend Engineer");
-    // One read per section: JobsSection's list, RoadmapSection's count.
-    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalledTimes(1));
 
-    listSavedJobsMock.mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
 
-    await waitFor(() => expect(listSavedJobsMock).toHaveBeenCalledTimes(3));
-    // And it settles there — no loop, and no redundant refetch of a list
-    // the section just updated itself.
+    // The delete is applied in place, so nothing refetches the list —
+    // and the roadmap still learns the new count.
     await waitFor(() =>
       expect(screen.queryByText("Junior Backend Engineer")).toBeNull(),
     );
-    expect(listSavedJobsMock).toHaveBeenCalledTimes(3);
+    expect(await screen.findByText(/of 0 saved jobs/)).toBeInTheDocument();
+    // NO LOOP: reporting the count upward must not feed back into
+    // another read.
+    expect(listSavedJobsMock).toHaveBeenCalledTimes(1);
   }, 10000);
 
   it("withdraws the roadmap when a job description is edited", async () => {
@@ -482,8 +480,8 @@ describe("dashboard saved-job coordination", () => {
     expect(
       screen.getByText(/saved jobs changed after this plan was made/i),
     ).toBeInTheDocument();
-    // And the live job state was re-read, so the count and the ceiling
-    // reflect the edited collection.
-    expect(listSavedJobsMock.mock.calls.length).toBeGreaterThan(readsBefore);
+    // AND IT COST NOTHING TO LEARN. An edit moves no count, so there is
+    // nothing to re-read: `jobsVersion` alone retires the plan.
+    expect(listSavedJobsMock.mock.calls.length).toBe(readsBefore);
   }, 10000);
 });

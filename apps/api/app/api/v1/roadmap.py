@@ -41,10 +41,18 @@ from app.api.v1.auth import get_current_user
 from app.api.v1.saved_job import read_saved_job_gaps, read_saved_job_match
 from app.db import get_db, release_session
 from app.explanation.facts import load_taxonomy_names
-from app.explanation.runtime import build_provider, provider_name
+from app.explanation.runtime import (
+    NOT_REQUESTED_PROVIDER_NAME,
+    build_provider,
+    provider_name,
+)
 from app.models.saved_job import SavedJob
 from app.models.user import User
-from app.roadmap.adapter import narrate
+
+# ALIASED because the query parameter below is also called `narrate`:
+# the request says whether to narrate, this does the narrating. The
+# parameter keeps the plain name because it is the public API.
+from app.roadmap.adapter import narrate as narrate_plan
 from app.roadmap.facts import (
     build_facts,
     collect_demands,
@@ -140,6 +148,7 @@ async def read_roadmap(
     top_n: int | None = Query(None, ge=MIN_TOP_N),
     duration_days: int = Query(28, ge=MIN_DURATION_DAYS, le=MAX_DURATION_DAYS),
     hours_per_day: float = Query(1.0, gt=0, le=MAX_HOURS_PER_DAY),
+    narrate: bool = Query(True),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RoadmapResponse:
@@ -161,6 +170,23 @@ async def read_roadmap(
     assembled into the facts at all, so an excluded job cannot
     contribute a weight, appear as an affected job, or be named by a
     model that was never given its id.
+
+    `narrate=false` RETURNS THE PLAN WITHOUT REACHING FOR A MODEL
+    (Prompt 7.2 F2). Every deterministic field is computed and returned
+    exactly as it would be otherwise — the selected jobs, the
+    priorities, the items and their steps, the day spans, the weeks,
+    the coverage, the affected jobs and every `why`. Only the written
+    layer is absent, reported as `narrative_status="skipped"`.
+
+    IT IS A SKIP, NOT A FAILURE. No provider is constructed and none is
+    called, so a client asking for the schedule alone cannot be made to
+    wait on `explanation_timeout_seconds` — which for a full narrative
+    is the longest wait in this product — and cannot be shown a
+    provider fault that never happened.
+
+    THE DEFAULT IS UNCHANGED. `narrate` defaults to True, so every
+    existing caller gets precisely the response it got before: same
+    fields, same statuses, same provider name, same generation.
     """
     jobs = (await db.scalars(select(SavedJob).where(SavedJob.user_id == current_user.id))).all()
     saved_job_count = len(jobs)
@@ -198,7 +224,12 @@ async def read_roadmap(
     # ordering the product needs is causal, not positional: nothing
     # about constructing a provider can now cost the deterministic
     # answer.
-    provider = build_provider(get_roadmap_provider, subject="roadmap")
+    #
+    # NOT BUILT AT ALL WHEN NO NARRATIVE WAS ASKED FOR. Construction is
+    # cheap, but "no provider is constructed" is the guarantee
+    # `narrate=false` makes, and a test can only hold us to it if the
+    # call genuinely does not happen.
+    provider = build_provider(get_roadmap_provider, subject="roadmap") if narrate else None
 
     if not selected_rows:
         # No saved jobs is not an empty roadmap — it is a statement
@@ -209,9 +240,13 @@ async def read_roadmap(
             formula_version=FORMULA_VERSION,
             schedule_version=SCHEDULE_VERSION,
             narrative_schema_version=NARRATIVE_SCHEMA_VERSION,
-            narrative_status="rejected",
+            # "rejected" only when a narrative was actually wanted. With
+            # `narrate=false` nothing was attempted, and the reason
+            # still says why there is no wording — there is no plan to
+            # write about.
+            narrative_status="rejected" if narrate else "skipped",
             reason="no_selected_jobs",
-            provider=provider_name(provider),
+            provider=provider_name(provider) if narrate else NOT_REQUESTED_PROVIDER_NAME,
             selected_job_count=0,
             saved_job_count=saved_job_count,
             has_selected_jobs=False,
@@ -259,10 +294,14 @@ async def read_roadmap(
         total_hours=total_hours,
     )
 
-    # THE LAST READ, hoisted out of the `narrate` call it used to be an
-    # argument to, so the boundary below is visible: everything above
-    # needs the database, nothing after it does.
-    taxonomy = await load_taxonomy_names(db)
+    # NOT READ WHEN NOTHING WILL BE VALIDATED. The taxonomy exists to
+    # check a model's wording against the curated names; with no
+    # narrative to check there is nothing to check it with.
+    #
+    # THE LAST READ otherwise, hoisted out of the `narrate` call it used
+    # to be an argument to, so the boundary below is visible:
+    # everything above needs the database, nothing after it does.
+    taxonomy = await load_taxonomy_names(db) if narrate else frozenset()
 
     # THE DATABASE IS DONE (Prompt 7.1b). `schedule` is dataclasses,
     # `facts` is a Pydantic model, and `_to_response` reads only those —
@@ -271,23 +310,37 @@ async def read_roadmap(
     # longest wait in this product. See app/db.py's `release_session`.
     await release_session(db)
 
-    outcome = await narrate(facts, provider=provider, taxonomy=taxonomy)
+    # THE FORK THAT MAKES THE PLAN INDEPENDENT (Prompt 7.2 F2).
+    # Everything above this line is deterministic and is now complete;
+    # `narrate=false` returns it here, having neither built a provider
+    # nor waited on one. The narrated path below is byte-identical in
+    # every deterministic field — it is the same `schedule`, the same
+    # `facts`, and the same `_to_response` — so a client that renders
+    # the skipped response first and the narrated one second sees prose
+    # appear and nothing else move.
+    outcome = await narrate_plan(facts, provider=provider, taxonomy=taxonomy) if narrate else None
 
     return _to_response(
         schedule=schedule,
         facts_evidence={row.evidence_id: row for row in facts.evidence},
-        outcome_status=outcome.status,
-        reason=outcome.reason,
-        provider=provider_name(provider),
-        overview=outcome.narrative.overview if outcome.narrative else None,
+        outcome_status=outcome.status if outcome else "skipped",
+        reason=outcome.reason if outcome else None,
+        provider=provider_name(provider) if narrate else NOT_REQUESTED_PROVIDER_NAME,
+        overview=outcome.narrative.overview if outcome and outcome.narrative else None,
         weeks_by_number=(
-            {week.week: week for week in outcome.narrative.weeks} if outcome.narrative else {}
+            {week.week: week for week in outcome.narrative.weeks}
+            if outcome and outcome.narrative
+            else {}
         ),
         prose_by_item=(
-            {item.item_id: item for item in outcome.narrative.items} if outcome.narrative else {}
+            {item.item_id: item for item in outcome.narrative.items}
+            if outcome and outcome.narrative
+            else {}
         ),
         prose_by_step=(
-            {step.step_id: step for step in outcome.narrative.steps} if outcome.narrative else {}
+            {step.step_id: step for step in outcome.narrative.steps}
+            if outcome and outcome.narrative
+            else {}
         ),
         selected_job_count=len(selected),
         saved_job_count=saved_job_count,

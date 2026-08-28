@@ -191,10 +191,18 @@ class RoadmapResponse(BaseModel):
     several jobs at once — which is the entire reason recurrence is part
     of the score.
 
-    `narrative_status` is "generated" or "rejected". On rejection every
-    deterministic field above is still present and only `task`,
-    `success_criteria`, `overview` and `focus` are null: losing the
-    wording must never cost the user the priorities.
+    `narrative_status` is "generated", "rejected" or "skipped". On
+    rejection every deterministic field above is still present and only
+    `task`, `success_criteria`, `overview` and `focus` are null: losing
+    the wording must never cost the user the priorities.
+
+    "skipped" MEANS NOBODY ASKED (Prompt 7.2 F2). The caller passed
+    `narrate=false`, so no provider was constructed and none was
+    called. The written fields are null for the same reason they are on
+    rejection, but nothing failed — a client must not render a fault.
+    The deterministic fields are identical to what a narrated request
+    returns, which is what lets a client show the schedule immediately
+    and attach the prose when it arrives.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -204,9 +212,12 @@ class RoadmapResponse(BaseModel):
     # days can change without implying the priorities moved.
     schedule_version: str
     narrative_schema_version: str
-    # "generated" | "rejected"
+    # "generated" | "rejected" | "skipped"
     narrative_status: str
-    # Machine-readable rejection reason, sharing 6.1's vocabulary.
+    # Machine-readable reason there is no narrative, sharing 6.1's
+    # vocabulary. Null on "generated", and null on "skipped" except
+    # where the plan itself is empty — "no_selected_jobs" is a fact
+    # about the input rather than a provider failure.
     reason: str | None = None
     provider: str
     selected_job_count: int

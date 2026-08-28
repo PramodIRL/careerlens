@@ -1406,17 +1406,28 @@ export interface RoadmapOptions {
   topN: number;
   durationDays: number;
   hoursPerDay: number;
+  /** Whether to ask the model for the written layer (Prompt 7.2 F2).
+   *
+   * OMITTED MEANS NARRATED, matching the API's own default, so every
+   * call written before this existed behaves exactly as it did. Passing
+   * `false` returns the complete deterministic plan without
+   * constructing or waiting on a provider — which is how the schedule
+   * reaches the screen before a local model has finished. */
+  narrate?: boolean;
 }
 
 export async function getRoadmap(
   accessToken: string,
-  { topN, durationDays, hoursPerDay }: RoadmapOptions,
+  { topN, durationDays, hoursPerDay, narrate }: RoadmapOptions,
 ): Promise<RoadmapResponse> {
   const query = new URLSearchParams({
     top_n: String(topN),
     duration_days: String(durationDays),
     hours_per_day: String(hoursPerDay),
   });
+  // Sent ONLY when explicitly declined, so the default request URL is
+  // byte-identical to the one this client has always produced.
+  if (narrate === false) query.set("narrate", "false");
   const response = await fetch(`${ROADMAP_BASE}?${query.toString()}`, {
     credentials: "include",
     headers: { Authorization: `Bearer ${accessToken}` },

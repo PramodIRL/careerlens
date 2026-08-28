@@ -31,10 +31,37 @@ import JobSemanticPanel from "./job-semantic-panel";
 
 interface JobsSectionProps {
   accessToken: string;
-  /** Bumped by the dashboard when candidate skills change, so each
-   * job's match score refetches. The score is derived server-side from
-   * current rows, so a stale panel is the only way it can be wrong. */
-  refreshKey?: number;
+  /** THREE SIGNALS, NOT ONE, because the four panels below are derived
+   * from three different sets of rows and a single counter refetched
+   * all of them for a change only one could see. Measured at five
+   * saved jobs, one bump cost twenty panel requests where five were
+   * warranted.
+   *
+   * Which panel listens to what is a fact about the handlers, not a
+   * preference:
+   *
+   *   match/gaps   `/match` and `/gaps` read `candidate_skills` and
+   *                `job_skill_requirements`, so confirming a skill or
+   *                landing new evidence changes them. A qualification
+   *                edit cannot — neither handler reads a
+   *                qualification row.
+   *   eligibility  `/eligibility` reads the qualification profile and
+   *                the job's eligibility bars. It never reads a single
+   *                skill row, so a confirm or reject cannot move it.
+   *   semantic     `/semantic` reads stored embeddings and the evidence
+   *                behind them. Confirming a skill writes neither, so
+   *                only work that produced new evidence changes it. */
+  matchRefreshKey?: number;
+  eligibilityRefreshKey?: number;
+  semanticRefreshKey?: number;
+  /** Called with the number of saved jobs whenever it changes,
+   * including the first load.
+   *
+   * REPORTED RATHER THAN REFETCHED. RoadmapSection needs this count to
+   * bound its "jobs to prepare for" input and used to issue its own
+   * `listSavedJobs` for it — a second identical request on every
+   * dashboard load, against a list this section already holds. */
+  onJobCountChange?: (count: number) => void;
   /** Called after the caller's saved jobs actually changed — one was
    * added, deleted, reordered or edited, and the server agreed.
    *
@@ -153,11 +180,20 @@ function formatDate(iso: string): string {
 
 export default function JobsSection({
   accessToken,
-  refreshKey = 0,
+  matchRefreshKey = 0,
+  eligibilityRefreshKey = 0,
+  semanticRefreshKey = 0,
   onJobsChanged,
+  onJobCountChange,
 }: JobsSectionProps) {
   const [jobs, setJobs] = useState<SavedJobResponse[]>([]);
   const [loading, setLoading] = useState(true);
+  // Whether a list has actually ARRIVED, which is not the same as
+  // "not loading any more". A failed first load also stops loading,
+  // and reporting the empty initial array as a count of 0 would tell
+  // the roadmap the user has no saved jobs when the truth is that we
+  // do not know — bounding its input to zero on a transient error.
+  const [hasList, setHasList] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [values, setValues] = useState<JobFormValues>(EMPTY_FORM);
   // One flag per in-flight operation, each also used to DISABLE its own
@@ -176,6 +212,23 @@ export default function JobsSection({
   // Two-step delete instead of window.confirm: a native dialog cannot be
   // driven in tests and is not reliably announced to screen readers.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // WHICH DISCLOSURES THE USER HAS OPENED — the thing that decides
+  // whether a job's panels exist at all.
+  //
+  // A SET, NOT ONE ID. Several jobs can be open at once, which is what
+  // <details> already allowed and what comparing two jobs requires.
+  // Making this a single id would turn the list into an accordion and
+  // close one job to read another, which is a product change nobody
+  // asked for.
+  const [openJobIds, setOpenJobIds] = useState<Set<string>>(new Set());
+
+  function toggleJob(id: string) {
+    setOpenJobIds((prior) => {
+      const next = new Set(prior);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
 
   const load = useCallback(async () => {
     try {
@@ -193,7 +246,10 @@ export default function JobsSection({
     let cancelled = false;
     listSavedJobs(accessToken)
       .then((list) => {
-        if (!cancelled) setJobs(list);
+        if (!cancelled) {
+          setJobs(list);
+          setHasList(true);
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -209,6 +265,17 @@ export default function JobsSection({
       cancelled = true;
     };
   }, [accessToken]);
+
+  // The count, reported upward whenever it moves.
+  //
+  // ON `jobs.length`, NOT ON `jobs`: editing a job's description
+  // replaces the array without changing how many there are, and the
+  // roadmap's ceiling does not care. `onJobCountChange` is a
+  // `useCallback` in the parent, so this settles after one pass.
+  useEffect(() => {
+    if (!hasList) return;
+    onJobCountChange?.(jobs.length);
+  }, [hasList, jobs.length, onJobCountChange]);
 
   /** Both importers share this: on success the draft becomes the form's
    * values and the user reviews it; on failure we say why and leave
@@ -615,68 +682,97 @@ export default function JobsSection({
                 // should not expand every score at once. Native
                 // <details> gives keyboard support and the expanded
                 // state announcement for free.
-                <details className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800">
-                  <summary className="cursor-pointer text-xs font-medium text-black dark:text-zinc-50">
+                //
+                // OPEN STATE IS REACT'S, and the panels below exist
+                // only while it is open. <details> hides its children
+                // with CSS, but React still MOUNTS them, so every panel
+                // ran its fetch effect behind a closed disclosure —
+                // measured at four requests per saved job on load, 33
+                // for eight jobs, for content nobody had asked to see.
+                // Rendering them conditionally is what makes the
+                // progressive disclosure real rather than visual.
+                //
+                // DRIVEN BY `onClick`, NOT `onToggle`. The click is
+                // cancelled and React sets `open` itself, so the
+                // element's state and the component's cannot disagree.
+                // `onToggle` would be the tidier hook, but jsdom sets
+                // `open` on a summary click WITHOUT firing toggle — so
+                // the tests below could never have opened a panel the
+                // way a user does. Keyboard activation dispatches a
+                // click too, so Enter and Space still work.
+                <details
+                  open={openJobIds.has(job.id)}
+                  className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800"
+                >
+                  <summary
+                    onClick={(event) => {
+                      event.preventDefault();
+                      toggleJob(job.id);
+                    }}
+                    className="cursor-pointer text-xs font-medium text-black dark:text-zinc-50"
+                  >
                     View match
                   </summary>
-                  <div className="mt-2 flex flex-col gap-3">
-                    <JobMatchPanel
-                      accessToken={accessToken}
-                      savedJobId={job.id}
-                      refreshKey={refreshKey}
-                    />
-                    {/* Gaps live beside the score in the same
+                  {openJobIds.has(job.id) && (
+                    <div className="mt-2 flex flex-col gap-3">
+                      <JobMatchPanel
+                        accessToken={accessToken}
+                        savedJobId={job.id}
+                        refreshKey={matchRefreshKey}
+                      />
+                      {/* Gaps live beside the score in the same
                         disclosure: "how well do I match" and "what am I
                         missing" are two readings of one answer, and both
                         come from the same shared resolver server-side. */}
-                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                      <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
-                        Skill gaps
-                      </h4>
-                      <JobGapPanel
-                        accessToken={accessToken}
-                        savedJobId={job.id}
-                        refreshKey={refreshKey}
-                      />
-                    </div>
-                    {/* Eligibility sits BESIDE the score, never inside
+                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                        <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
+                          Skill gaps
+                        </h4>
+                        <JobGapPanel
+                          accessToken={accessToken}
+                          savedJobId={job.id}
+                          refreshKey={matchRefreshKey}
+                        />
+                      </div>
+                      {/* Eligibility sits BESIDE the score, never inside
                         it. "82% skill match" and "does not meet the
                         CGPA bar" are different kinds of claim, and the
                         two are never combined into one number. */}
-                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                      <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
-                        Eligibility
-                      </h4>
-                      <JobEligibilityPanel
-                        accessToken={accessToken}
-                        savedJobId={job.id}
-                        refreshKey={refreshKey}
-                      />
-                    </div>
-                    {/* Supporting evidence, placed LAST and below both
+                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                        <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
+                          Eligibility
+                        </h4>
+                        <JobEligibilityPanel
+                          accessToken={accessToken}
+                          savedJobId={job.id}
+                          refreshKey={eligibilityRefreshKey}
+                        />
+                      </div>
+                      {/* Supporting evidence, placed LAST and below both
                         the score and eligibility: it is the weakest
                         claim on the page and must not read as part of
                         either. Its own panel carries the wording that
                         keeps it from being mistaken for skill
                         ownership. */}
-                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                      <JobSemanticPanel
-                        accessToken={accessToken}
-                        savedJobId={job.id}
-                        refreshKey={refreshKey}
-                      />
-                    </div>
-                    {/* LAST, and opt-in. Generated prose is the weakest
+                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                        <JobSemanticPanel
+                          accessToken={accessToken}
+                          savedJobId={job.id}
+                          refreshKey={semanticRefreshKey}
+                        />
+                      </div>
+                      {/* LAST, and opt-in. Generated prose is the weakest
                         claim on the page: it explains the numbers above
                         and must never appear to produce them, so it
                         loads only when the user asks for it. */}
-                    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                      <JobExplanationPanel
-                        accessToken={accessToken}
-                        savedJobId={job.id}
-                      />
+                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                        <JobExplanationPanel
+                          accessToken={accessToken}
+                          savedJobId={job.id}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </details>
               )}
             </li>

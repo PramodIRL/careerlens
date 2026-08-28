@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import GenerationProgress from "./generation-progress";
+
 import {
   ApiError,
   getRoadmap,
-  listSavedJobs,
   type RoadmapGapState,
   type RoadmapItem,
   type RoadmapResponse,
@@ -42,7 +43,19 @@ function clampTopN(value: number, savedJobCount: number): number {
  */
 interface RoadmapSectionProps {
   accessToken: string;
-  refreshKey?: number;
+  /** How many jobs the candidate has saved, supplied by the dashboard
+   * from JobsSection's own list.
+   *
+   * A PROP, NOT A FETCH. This section used to issue its own
+   * `listSavedJobs` purely to learn a number the page already had —
+   * a duplicate request on every dashboard load, and another one
+   * whenever a skill or qualification changed, neither of which can
+   * alter the saved jobs.
+   *
+   * `null` MEANS "NOT KNOWN YET", which is not the same as zero: the
+   * input falls back to unbounded and shows "—", exactly as it did
+   * while the old request was in flight. */
+  savedJobCount?: number | null;
   /** Bumped by the dashboard when the saved jobs changed — one was
    * added, deleted, reordered or edited.
    *
@@ -133,49 +146,40 @@ function dayRange(startDay: number, endDay: number): string {
 
 export default function RoadmapSection({
   accessToken,
-  refreshKey = 0,
+  savedJobCount = null,
   jobsVersion = 0,
 }: RoadmapSectionProps) {
   const [topN, setTopN] = useState(DEFAULT_TOP_N);
-  // The ceiling on topN is the user's OWN saved-job count, so it has to
-  // be fetched. The roadmap response reports it too, which is what lets
-  // the control re-bound itself after a job is added or deleted without
-  // a second request.
-  const [savedJobCount, setSavedJobCount] = useState<number | null>(null);
   const [durationDays, setDurationDays] = useState(28);
   const [hoursPerDay, setHoursPerDay] = useState(1);
   const [roadmap, setRoadmap] = useState<RoadmapResponse | null>(null);
+  // TWO FLAGS, TWO DIFFERENT WAITS. `loading` is the deterministic
+  // request — fast, and the one the button is disabled for. `narrating`
+  // is the model, which can run for minutes and must never hold the
+  // schedule or the button hostage.
   const [loading, setLoading] = useState(false);
+  const [narrating, setNarrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The narrative request itself failed (the model was unreachable, or
+  // the request errored). Distinct from the API's own `rejected`
+  // status, which is a narrative that WAS attempted and did not pass
+  // validation — both cost only the wording, and both say so.
+  const [narrativeFailed, setNarrativeFailed] = useState(false);
   // Whether the plan on screen predates a change to the saved jobs.
   const [outdated, setOutdated] = useState(false);
 
-  // The count only — never the roadmap. Generating a plan reaches an
-  // LLM, so it stays behind an explicit click; knowing how many jobs
-  // exist is a cheap read the control needs before the first one.
+  // DERIVED, NOT SYNCED. The ceiling is a prop, so the bounded value is
+  // computed from it on every render rather than copied into state by
+  // an effect — no cascading render, and no window in which the input
+  // shows a number above a ceiling that has already moved.
   //
-  // RE-READ WHEN THE COLLECTION CHANGES, which is what `jobsVersion`
-  // reports. Without it this ran once and the ceiling went stale the
-  // moment a job was deleted: the input still offered "5 of 5 saved
-  // jobs" against two that existed, every Generate came back 422, and
-  // because the count only healed on a SUCCESSFUL response there was no
-  // way out but reloading the page.
-  useEffect(() => {
-    let cancelled = false;
-    listSavedJobs(accessToken)
-      .then((jobs) => {
-        if (cancelled) return;
-        setSavedJobCount(jobs.length);
-        setTopN((current) => clampTopN(current, jobs.length));
-      })
-      .catch(() => {
-        // A failed count is not worth an error banner: the input falls
-        // back to unbounded and the API rejects anything impossible.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accessToken, refreshKey, jobsVersion]);
+  // THE STALENESS 7.1(c) FIXED IS STILL FIXED, by a shorter route: the
+  // count arrives straight from the list JobsSection holds, so deleting
+  // a job re-bounds this input as the list changes. Without it the
+  // input would still offer "5 of 5 saved jobs" against two that exist
+  // and every Generate would come back 422.
+  const effectiveTopN =
+    savedJobCount === null ? topN : clampTopN(topN, savedJobCount);
 
   // A PLAN IS ABOUT THE JOBS IT WAS BUILT FROM. When those change it
   // stops describing the user's actual situation — it can name a job
@@ -192,27 +196,90 @@ export default function RoadmapSection({
     setOutdated(true);
   }, [jobsVersion]);
 
+  /**
+   * TWO REQUESTS, DELIBERATELY (Prompt 7.2 F2).
+   *
+   * The first asks for the plan alone and paints it. The second asks
+   * for the same plan WITH wording and swaps it in when the local model
+   * is done. The user starts reading a finished schedule while the
+   * model is still typing, which is the whole point: CareerLens knows
+   * the plan, Ollama adds mentoring.
+   *
+   * THE SECOND RESPONSE IS NOT A DIFFERENT PLAN. The API computes the
+   * deterministic half identically either way — asserted in
+   * tests/test_roadmap_api.py — so the swap adds prose and moves
+   * nothing the reader had already started on.
+   *
+   * COSTS ONE EXTRA DETERMINISTIC COMPUTATION, which is the honest
+   * price of doing this without a cache, a queue or a stream. It is a
+   * few hundred milliseconds of indexed reads against a wait that runs
+   * to minutes.
+   */
+  const runId = useRef(0);
+
   async function generate() {
+    // EVERY CLICK GETS A TICKET. A narrative from a superseded run must
+    // never land on a newer plan — the user can change the inputs and
+    // regenerate while a model is still working, and the stale prose
+    // would then describe a schedule nobody is looking at.
+    const run = ++runId.current;
+    const request = {
+      topN: effectiveTopN,
+      durationDays,
+      hoursPerDay,
+    };
+
     setLoading(true);
+    setNarrativeFailed(false);
     setError(null);
+
+    let plan: RoadmapResponse;
     try {
-      const next = await getRoadmap(accessToken, {
-        topN,
-        durationDays,
-        hoursPerDay,
-      });
-      setRoadmap(next);
-      // Built from the jobs as they are now, so whatever made the last
-      // one stale no longer applies.
-      setOutdated(false);
-      // Self-healing: if a job was deleted in another tab, the ceiling
-      // and the input correct themselves here.
-      setSavedJobCount(next.saved_job_count);
-      setTopN((current) => clampTopN(current, next.saved_job_count));
+      plan = await getRoadmap(accessToken, { ...request, narrate: false });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "something went wrong");
-    } finally {
       setLoading(false);
+      return;
+    }
+
+    if (run !== runId.current) return;
+
+    setRoadmap(plan);
+    // Built from the jobs as they are now, so whatever made the last
+    // one stale no longer applies.
+    setOutdated(false);
+    // Self-healing, still: if a job was deleted in ANOTHER TAB the
+    // page's count cannot know, so the server's own figure re-bounds
+    // the input. It corrects `topN` only — the displayed ceiling
+    // belongs to the prop, and letting a response overwrite it would
+    // give this section a second, competing source for one number.
+    setTopN((current) => clampTopN(current, plan.saved_job_count));
+    // THE SCHEDULE IS ON SCREEN AND USABLE FROM HERE. Everything below
+    // is enrichment, and the button is released so the user is not held
+    // by prose they may not want to wait for.
+    setLoading(false);
+
+    // Nothing to narrate about an empty plan, and asking would spend a
+    // model run to be told so.
+    if (!plan.has_selected_jobs) return;
+
+    setNarrating(true);
+    try {
+      const narrated = await getRoadmap(accessToken, {
+        ...request,
+        narrate: true,
+      });
+      if (run !== runId.current) return;
+      setRoadmap(narrated);
+    } catch {
+      if (run !== runId.current) return;
+      // NOT `setError`. The plan is complete and on screen; a red banner
+      // over a working schedule would say the wrong thing. This is the
+      // same "you lost the wording, not the plan" state the API's own
+      // `rejected` status already produces, reached a different way.
+      setNarrativeFailed(true);
+    } finally {
+      if (run === runId.current) setNarrating(false);
     }
   }
 
@@ -248,7 +315,7 @@ export default function RoadmapSection({
               type="number"
               min={1}
               max={savedJobCount ?? undefined}
-              value={topN}
+              value={effectiveTopN}
               onChange={(event) =>
                 setTopN(
                   clampTopN(Number(event.target.value), savedJobCount ?? 0),
@@ -310,6 +377,17 @@ export default function RoadmapSection({
         </button>
       </div>
 
+      {/* ON THE NARRATIVE, NOT THE SCHEDULE. The deterministic request
+          is fast and needs no stopwatch; the model is the wait worth
+          reporting, and by the time this shows the plan below is
+          already on screen and readable. */}
+      <div className="mt-3">
+        <GenerationProgress
+          running={narrating}
+          label="Writing mentoring guidance…"
+        />
+      </div>
+
       {error && (
         <p role="alert" className="mt-3 text-xs text-red-700 dark:text-red-400">
           {error}
@@ -332,13 +410,27 @@ export default function RoadmapSection({
           roadmap again for an up-to-date plan.
         </p>
       ) : (
-        roadmap && <RoadmapPlan roadmap={roadmap} />
+        roadmap && (
+          <RoadmapPlan
+            roadmap={roadmap}
+            narrating={narrating}
+            narrativeFailed={narrativeFailed}
+          />
+        )
       )}
     </section>
   );
 }
 
-function RoadmapPlan({ roadmap }: { roadmap: RoadmapResponse }) {
+function RoadmapPlan({
+  roadmap,
+  narrating,
+  narrativeFailed,
+}: {
+  roadmap: RoadmapResponse;
+  narrating: boolean;
+  narrativeFailed: boolean;
+}) {
   if (!roadmap.has_selected_jobs) {
     return (
       <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
@@ -375,6 +467,30 @@ function RoadmapPlan({ roadmap }: { roadmap: RoadmapResponse }) {
           for are left unscheduled. Rather than stretch these skills to fill the
           time, use it to go deeper on what is below — or save more jobs and
           generate again.
+        </p>
+      )}
+
+      {/* THE ARCHITECTURE, SAID OUT LOUD. The plan below is finished
+          and was computed without a model; the mentoring prose is still
+          being written and is the only thing outstanding. A reader who
+          sees this knows they can start now. */}
+      {narrating && roadmap.narrative_status === "skipped" && (
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">
+          Your priorities and schedule below are complete — they are calculated
+          from your own saved jobs and evidence, not written by a model. Written
+          mentoring guidance is being added and will appear here; you can start
+          reading now.
+        </p>
+      )}
+
+      {/* The narrative request itself failed. Same loss as a rejection
+          below, reached a different way, so it says the same thing. */}
+      {narrativeFailed && (
+        <p className="text-xs text-amber-800 dark:text-amber-300">
+          Your priorities and schedule below are complete — they are calculated
+          from your own saved jobs and evidence, not written by a model. The
+          written guidance could not be produced this time — the explanation
+          service could not be reached.
         </p>
       )}
 
