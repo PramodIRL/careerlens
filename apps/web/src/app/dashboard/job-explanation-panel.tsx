@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import GenerationProgress from "./generation-progress";
+
 import {
   ApiError,
   getJobExplanation,
@@ -151,11 +153,12 @@ export default function JobExplanationPanel({
         </button>
       </div>
 
-      {loading && (
-        <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
-          Writing an explanation…
-        </p>
-      )}
+      {/* The button stays disabled while this runs — the existing
+          duplicate-click guard, unchanged. This only reports how long
+          the single in-flight request has been going, which is the one
+          thing that separates a model still working from a daemon that
+          has gone away. */}
+      <GenerationProgress running={loading} label="Writing an explanation…" />
 
       {error && (
         <p role="alert" className="text-xs text-red-700 dark:text-red-400">

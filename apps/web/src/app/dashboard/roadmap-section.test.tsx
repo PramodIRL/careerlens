@@ -1,5 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import RoadmapSection from "./roadmap-section";
 import type { RoadmapResponse } from "@/lib/api-client";
@@ -180,12 +186,8 @@ describe("RoadmapSection", () => {
   });
 
   it("bounds the job count by what the user has actually saved", async () => {
-    vi.mocked(listSavedJobs).mockResolvedValue([
-      { id: "a" },
-      { id: "b" },
-    ] as never);
     vi.mocked(getRoadmap).mockResolvedValue(roadmap());
-    render(<RoadmapSection accessToken="token" />);
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
 
     const input = await screen.findByLabelText(/jobs to prepare for/i);
     // The default of 5 clamps down to the two jobs that exist.
@@ -360,6 +362,7 @@ describe("RoadmapSection", () => {
         topN: 5,
         durationDays: 2,
         hoursPerDay: 1,
+        narrate: false,
       }),
     );
   });
@@ -378,6 +381,7 @@ describe("RoadmapSection", () => {
         topN: 3,
         durationDays: 28,
         hoursPerDay: 1,
+        narrate: false,
       }),
     );
   });
@@ -401,39 +405,29 @@ describe("RoadmapSection when the saved jobs change", () => {
     vi.mocked(listSavedJobs).mockReset();
   });
 
-  /** Four jobs, then two — the deletion the bug report describes. */
-  function shrinkingCollection() {
-    vi.mocked(listSavedJobs)
-      .mockResolvedValueOnce([
-        { id: "a" },
-        { id: "b" },
-        { id: "c" },
-        { id: "d" },
-      ] as never)
-      .mockResolvedValue([{ id: "a" }, { id: "b" }] as never);
-  }
-
-  it("re-reads the count when a job is deleted", async () => {
-    shrinkingCollection();
+  it("shows the count the dashboard reports when a job is deleted", async () => {
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={4} jobsVersion={0} />,
     );
     expect(await screen.findByText(/of 4 saved jobs/)).toBeInTheDocument();
 
-    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={1} />,
+    );
 
     expect(await screen.findByText(/of 2 saved jobs/)).toBeInTheDocument();
   });
 
   it("clamps the chosen job count down to what is left", async () => {
-    shrinkingCollection();
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={4} jobsVersion={0} />,
     );
     const input = await screen.findByLabelText(/jobs to prepare for/i);
     await waitFor(() => expect(input).toHaveValue(4));
 
-    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={1} />,
+    );
 
     await waitFor(() => expect(input).toHaveValue(2));
     expect(input).toHaveAttribute("max", "2");
@@ -441,17 +435,20 @@ describe("RoadmapSection when the saved jobs change", () => {
 
   it("never asks for more jobs than the user still has", async () => {
     // THE 422 ITSELF. Before the fix this sent top_n=4 against two saved
-    // jobs, the API refused it, and the section could not recover.
-    shrinkingCollection();
+    // jobs, the API refused it, and the section could not recover. The
+    // guard is now a clamp against the reported count rather than a
+    // refetch, and it has to hold just as firmly.
     vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={4} jobsVersion={0} />,
     );
     await waitFor(() =>
       expect(screen.getByLabelText(/jobs to prepare for/i)).toHaveValue(4),
     );
 
-    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={1} />,
+    );
     await waitFor(() =>
       expect(screen.getByLabelText(/jobs to prepare for/i)).toHaveValue(2),
     );
@@ -462,18 +459,15 @@ describe("RoadmapSection when the saved jobs change", () => {
         topN: 2,
         durationDays: 28,
         hoursPerDay: 1,
+        narrate: false,
       }),
     );
   });
 
   it("withdraws a plan built from jobs that have since changed", async () => {
-    vi.mocked(listSavedJobs).mockResolvedValue([
-      { id: "a" },
-      { id: "b" },
-    ] as never);
     vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={0} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
@@ -490,13 +484,9 @@ describe("RoadmapSection when the saved jobs change", () => {
   });
 
   it("shows the fresh plan again once it is regenerated", async () => {
-    vi.mocked(listSavedJobs).mockResolvedValue([
-      { id: "a" },
-      { id: "b" },
-    ] as never);
     vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={0} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
     expect(await screen.findByText("AWS")).toBeInTheDocument();
@@ -515,8 +505,9 @@ describe("RoadmapSection when the saved jobs change", () => {
   it("says nothing about staleness before anything was generated", async () => {
     // Arriving on the page is not a change, and there is no plan to
     // retire — the mount run of the effect must stay silent.
-    vi.mocked(listSavedJobs).mockResolvedValue([{ id: "a" }] as never);
-    render(<RoadmapSection accessToken="token" jobsVersion={3} />);
+    render(
+      <RoadmapSection accessToken="token" savedJobCount={1} jobsVersion={3} />,
+    );
 
     expect(await screen.findByText(/of 1 saved job/)).toBeInTheDocument();
     expect(
@@ -524,33 +515,38 @@ describe("RoadmapSection when the saved jobs change", () => {
     ).toBeNull();
   });
 
-  it("counts once per change, not once per render", async () => {
-    // THE PERFORMANCE GUARD. `jobsVersion` is a dependency, so a render
-    // that changes nothing must not re-read the collection.
-    vi.mocked(listSavedJobs).mockResolvedValue([{ id: "a" }] as never);
+  it("never lists the saved jobs itself (7.2 F5)", async () => {
+    // THE PERFORMANCE GUARD, restated. This section used to fetch the
+    // list purely to learn its length — a duplicate of JobsSection's own
+    // request on every dashboard load, and another one on every skill or
+    // qualification change. The count is a prop now, so the correct
+    // number of requests from here is zero, in every one of the states
+    // that used to trigger one.
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
-    );
-    await waitFor(() => expect(listSavedJobs).toHaveBeenCalledTimes(1));
-
-    rerender(<RoadmapSection accessToken="token" jobsVersion={0} />);
-    rerender(<RoadmapSection accessToken="token" jobsVersion={0} />);
-    expect(listSavedJobs).toHaveBeenCalledTimes(1);
-
-    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
-    await waitFor(() => expect(listSavedJobs).toHaveBeenCalledTimes(2));
-  });
-
-  it("re-reads the count when a job is added", async () => {
-    vi.mocked(listSavedJobs)
-      .mockResolvedValueOnce([{ id: "a" }] as never)
-      .mockResolvedValue([{ id: "a" }, { id: "b" }] as never);
-    const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={1} jobsVersion={0} />,
     );
     expect(await screen.findByText(/of 1 saved job/)).toBeInTheDocument();
 
-    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={1} jobsVersion={0} />,
+    );
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={1} />,
+    );
+    expect(await screen.findByText(/of 2 saved jobs/)).toBeInTheDocument();
+
+    expect(listSavedJobs).not.toHaveBeenCalled();
+  });
+
+  it("shows the count the dashboard reports when a job is added", async () => {
+    const { rerender } = render(
+      <RoadmapSection accessToken="token" savedJobCount={1} jobsVersion={0} />,
+    );
+    expect(await screen.findByText(/of 1 saved job/)).toBeInTheDocument();
+
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={1} />,
+    );
 
     expect(await screen.findByText(/of 2 saved jobs/)).toBeInTheDocument();
   });
@@ -558,23 +554,434 @@ describe("RoadmapSection when the saved jobs change", () => {
   it("retires a plan after a reorder, whose priorities have moved", async () => {
     // The count is identical; `roadmap_priority_v1` reads the ORDER, so
     // the ranks in a plan drawn before the move are no longer the
-    // user's.
-    vi.mocked(listSavedJobs).mockResolvedValue([
-      { id: "a" },
-      { id: "b" },
-    ] as never);
+    // user's. `savedJobCount` deliberately does not move here — this is
+    // exactly the case a count-based signal cannot see, which is why
+    // `jobsVersion` remains its own prop.
     vi.mocked(getRoadmap).mockResolvedValue(roadmap({ saved_job_count: 2 }));
     const { rerender } = render(
-      <RoadmapSection accessToken="token" jobsVersion={0} />,
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={0} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
     expect(await screen.findByText("AWS")).toBeInTheDocument();
 
-    rerender(<RoadmapSection accessToken="token" jobsVersion={1} />);
+    rerender(
+      <RoadmapSection accessToken="token" savedJobCount={2} jobsVersion={1} />,
+    );
 
     await waitFor(() => expect(screen.queryByText("AWS")).toBeNull());
     expect(screen.getByRole("status")).toHaveTextContent(
       /generate the roadmap again/i,
+    );
+  });
+});
+// =====================================================================
+// 7.2 F2 — the schedule must not wait for the model
+//
+// The route used to compute the whole deterministic plan and then hold
+// it behind a narrative that can run to `explanation_timeout_seconds`
+// (180) against a local model producing roughly ten tokens a second.
+// The section now asks for the plan alone, paints it, and asks for the
+// wording separately.
+//
+// THE ARCHITECTURE THESE PROTECT: CareerLens knows the plan, Ollama
+// adds mentoring. Every test below is written so that it fails if the
+// user is ever made to wait for prose before seeing the schedule.
+// =====================================================================
+
+describe("RoadmapSection deterministic-first generation", () => {
+  beforeEach(() => {
+    vi.mocked(getRoadmap).mockReset();
+  });
+
+  /** The real shape of the two-phase flow: the deterministic request
+   * resolves at once, the narrative is held open by the test. */
+  function deterministicThenPendingNarrative(
+    plan: RoadmapResponse = roadmap({
+      narrative_status: "skipped",
+      overview: null,
+      saved_job_count: 2,
+    }),
+  ) {
+    let settle: (value: RoadmapResponse) => void = () => {};
+    let reject: (reason: unknown) => void = () => {};
+    vi.mocked(getRoadmap).mockImplementation((_token, options) =>
+      options.narrate === false
+        ? Promise.resolve(plan)
+        : new Promise<RoadmapResponse>((resolve, rejectIt) => {
+            settle = resolve;
+            reject = rejectIt;
+          }),
+    );
+    return {
+      settleNarrative: (value: RoadmapResponse) => settle(value),
+      failNarrative: (reason: unknown) => reject(reason),
+    };
+  }
+
+  function generate() {
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+  }
+
+  it("renders the schedule before the narrative has resolved", async () => {
+    // THE WHOLE POINT. The narrative promise is still open for the
+    // entirety of this test, and the plan is already readable.
+    deterministicThenPendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+
+    expect(await screen.findByText("AWS")).toBeInTheDocument();
+    // Not just the item name — the substance a user acts on.
+    expect(screen.getByText(/Missing — required/)).toBeInTheDocument();
+    expect(screen.getByText(/Days 1–4/)).toBeInTheDocument();
+    expect(screen.getByText(/Helps Acme \(#1\)/)).toBeInTheDocument();
+    expect(screen.getByText("Why this?")).toBeInTheDocument();
+  });
+
+  it("asks for the plan without a narrative first, then for the wording", async () => {
+    deterministicThenPendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+    await screen.findByText("AWS");
+
+    await waitFor(() => expect(getRoadmap).toHaveBeenCalledTimes(2));
+    // ORDER MATTERS: deterministic first, or the user waits.
+    expect(vi.mocked(getRoadmap).mock.calls[0][1].narrate).toBe(false);
+    expect(vi.mocked(getRoadmap).mock.calls[1][1].narrate).toBe(true);
+    // And the second asks about the SAME plan — a different top_n or
+    // window would narrate something other than what is on screen.
+    const [first, second] = vi.mocked(getRoadmap).mock.calls;
+    expect({ ...second[1], narrate: undefined }).toEqual({
+      ...first[1],
+      narrate: undefined,
+    });
+  });
+
+  it("says the guidance is still being written, without implying a fault", async () => {
+    deterministicThenPendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+    await screen.findByText("AWS");
+
+    expect(
+      screen.getByText(/Written mentoring guidance is being added/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/you can start reading now/i)).toBeInTheDocument();
+    // NOT a failure message — nothing has failed.
+    expect(screen.queryByText(/could not be produced this time/i)).toBeNull();
+  });
+
+  it("replaces the pending state with the guidance when it arrives", async () => {
+    const pending = deterministicThenPendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+    await screen.findByText("AWS");
+    expect(
+      screen.getByText(/Written mentoring guidance is being added/i),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      pending.settleNarrative(roadmap({ saved_job_count: 2 }));
+    });
+
+    // The prose is in, the pending line is gone, and the schedule that
+    // was already on screen is still there.
+    expect(
+      await screen.findByText(/Deploy a small service to AWS/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Written mentoring guidance is being added/i),
+    ).toBeNull();
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+    expect(screen.getByText(/Days 1–4/)).toBeInTheDocument();
+  });
+
+  it("keeps the whole plan usable when the narrative request fails", async () => {
+    // OLLAMA UNAVAILABLE, OR TIMED OUT. Both arrive here as a rejected
+    // request, and neither may cost the user the schedule.
+    const pending = deterministicThenPendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+    await screen.findByText("AWS");
+
+    await act(async () => {
+      pending.failNarrative(new Error("ollama went away"));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/could not be produced this time/i),
+      ).toBeInTheDocument(),
+    );
+    // THE PLAN SURVIVES INTACT.
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+    expect(screen.getByText(/Missing — required/)).toBeInTheDocument();
+    expect(screen.getByText(/Days 1–4/)).toBeInTheDocument();
+    // And it is not reported as a page-level error over a working plan.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("still honours a narrative the API itself rejected", async () => {
+    // A DIFFERENT FAILURE, SAME LOSS. The request succeeded and the
+    // model's answer failed validation server-side.
+    vi.mocked(getRoadmap).mockImplementation((_token, options) =>
+      Promise.resolve(
+        options.narrate === false
+          ? roadmap({ narrative_status: "skipped", overview: null })
+          : roadmap({
+              narrative_status: "rejected",
+              reason: "provider_timeout",
+              overview: null,
+            }),
+      ),
+    );
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+
+    expect(
+      await screen.findByText(/did not answer in time/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+  });
+
+  it("makes exactly one deterministic and one narrative request per click", async () => {
+    const pending = deterministicThenPendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+    await screen.findByText("AWS");
+    await waitFor(() => expect(getRoadmap).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      pending.settleNarrative(roadmap({ saved_job_count: 2 }));
+    });
+    await screen.findByText(/Deploy a small service to AWS/);
+
+    // NO LOOP. Swapping the narrated plan in must not retrigger either
+    // request.
+    expect(getRoadmap).toHaveBeenCalledTimes(2);
+    const narrateFlags = vi
+      .mocked(getRoadmap)
+      .mock.calls.map((call) => call[1].narrate);
+    expect(narrateFlags).toEqual([false, true]);
+  });
+
+  it("spends no model run narrating an empty plan", async () => {
+    // Nothing is selected, so there is nothing to write about and
+    // asking would burn a generation to be told so.
+    vi.mocked(getRoadmap).mockResolvedValue(
+      roadmap({
+        has_selected_jobs: false,
+        selected_job_count: 0,
+        saved_job_count: 0,
+        narrative_status: "skipped",
+        overview: null,
+        weeks: [],
+      }),
+    );
+    render(<RoadmapSection accessToken="token" savedJobCount={0} />);
+
+    generate();
+
+    expect(
+      await screen.findByText(/have not saved any jobs yet/i),
+    ).toBeInTheDocument();
+    expect(getRoadmap).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getRoadmap).mock.calls[0][1].narrate).toBe(false);
+  });
+
+  it("does not let a superseded narrative overwrite a newer plan", async () => {
+    // The button is released once the schedule lands, so a user can
+    // regenerate while a model is still working on the previous run.
+    const settles: ((value: RoadmapResponse) => void)[] = [];
+    vi.mocked(getRoadmap).mockImplementation((_token, options) =>
+      options.narrate === false
+        ? Promise.resolve(
+            roadmap({ narrative_status: "skipped", overview: null }),
+          )
+        : new Promise<RoadmapResponse>((resolve) => settles.push(resolve)),
+    );
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    generate();
+    await screen.findByText("AWS");
+    await waitFor(() => expect(settles).toHaveLength(1));
+
+    generate();
+    await waitFor(() => expect(settles).toHaveLength(2));
+
+    // The FIRST run's narrative comes back late and must be ignored.
+    await act(async () => {
+      settles[0](
+        roadmap({
+          overview: "Stale wording from a run the user replaced.",
+        }),
+      );
+    });
+
+    expect(
+      screen.queryByText(/Stale wording from a run the user replaced/),
+    ).toBeNull();
+  });
+});
+
+// =====================================================================
+// 7.2 F3 (Pass A), now attached to the wait that actually matters
+//
+// The counter moved from the deterministic request to the narrative
+// one. That is the same guarantee in a better place: the fast request
+// never needed a stopwatch, and the model is the thing that can run for
+// minutes. The Pass A assertions are unchanged in substance — count,
+// threshold note, and a clean stop on both outcomes.
+// =====================================================================
+
+describe("RoadmapSection elapsed-time feedback", () => {
+  beforeEach(() => {
+    vi.mocked(getRoadmap).mockReset();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function pendingNarrative() {
+    let settle: (value: RoadmapResponse) => void = () => {};
+    let reject: (reason: unknown) => void = () => {};
+    vi.mocked(getRoadmap).mockImplementation((_token, options) =>
+      options.narrate === false
+        ? Promise.resolve(
+            roadmap({
+              narrative_status: "skipped",
+              overview: null,
+              saved_job_count: 2,
+            }),
+          )
+        : new Promise<RoadmapResponse>((resolve, rejectIt) => {
+            settle = resolve;
+            reject = rejectIt;
+          }),
+    );
+    return {
+      settleNarrative: (value: RoadmapResponse) => settle(value),
+      failNarrative: (reason: unknown) => reject(reason),
+    };
+  }
+
+  async function generateAndWaitForPlan() {
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+    await screen.findByText("AWS");
+  }
+
+  it("counts the seconds the model has been writing", async () => {
+    pendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    await generateAndWaitForPlan();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      /Writing mentoring guidance… 0s/,
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /Writing mentoring guidance… 2s/,
+    );
+  });
+
+  it("explains a long wait without implying the plan failed", async () => {
+    pendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    await generateAndWaitForPlan();
+    await screen.findByRole("status");
+
+    await act(async () => {
+      vi.advanceTimersByTime(21000);
+    });
+
+    expect(screen.getByText(/runs on a local model/i)).toBeInTheDocument();
+    // And the plan it is not blocking is still right there.
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+  });
+
+  it("clears the counter once the guidance arrives", async () => {
+    const pending = pendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    await generateAndWaitForPlan();
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    await act(async () => {
+      pending.settleNarrative(roadmap({ saved_job_count: 2 }));
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Writing mentoring guidance…/)).toBeNull(),
+    );
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+  });
+
+  it("clears the counter when the narrative fails", async () => {
+    const pending = pendingNarrative();
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    await generateAndWaitForPlan();
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    await act(async () => {
+      pending.failNarrative(new Error("ollama went away"));
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Writing mentoring guidance…/)).toBeNull(),
+    );
+    expect(screen.getByText("AWS")).toBeInTheDocument();
+  });
+
+  it("guards the button for the deterministic request it blocks on", async () => {
+    // THE DUPLICATE-CLICK GUARD, still on the request that owns it.
+    // It is deliberately NOT held through narration: making the user
+    // wait for prose to press a button would reintroduce exactly the
+    // coupling F2 removes.
+    let settleDeterministic: (value: RoadmapResponse) => void = () => {};
+    vi.mocked(getRoadmap).mockImplementation(
+      () =>
+        new Promise<RoadmapResponse>((resolve) => {
+          settleDeterministic = resolve;
+        }),
+    );
+    render(<RoadmapSection accessToken="token" savedJobCount={2} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /generate roadmap/i }));
+
+    const busy = await screen.findByRole("button", { name: /building/i });
+    expect(busy).toBeDisabled();
+    fireEvent.click(busy);
+    fireEvent.click(busy);
+    expect(getRoadmap).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      settleDeterministic(
+        roadmap({ narrative_status: "skipped", overview: null }),
+      );
+    });
+    // Released as soon as the schedule is on screen.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /generate roadmap/i }),
+      ).toBeEnabled(),
     );
   });
 });

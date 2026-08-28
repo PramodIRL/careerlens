@@ -1,5 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getJobExplanationMock = vi.fn();
 
@@ -134,5 +140,171 @@ describe("JobExplanationPanel", () => {
     );
     expect(screen.queryByText("Strengths")).not.toBeInTheDocument();
     expect(screen.queryByText("Next steps")).not.toBeInTheDocument();
+  });
+});
+
+// =====================================================================
+// 7.2 F3 — elapsed-time feedback while a local model generates
+//
+// `explanation_timeout_seconds` is 180 and a local 7B model generates
+// at roughly ten tokens a second, so "Writing an explanation…" could
+// sit unchanged for minutes with no way to tell a working model from a
+// daemon that had gone away. The counter is the difference.
+//
+// FAKE TIMERS, because the assertion is about the passage of time and a
+// real one would make this test take as long as the thing it measures.
+// =====================================================================
+
+describe("elapsed-time feedback while generating", () => {
+  beforeEach(() => {
+    getJobExplanationMock.mockReset();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Hold the request open so the loading state can be inspected. */
+  function pendingExplanation() {
+    let settle: (value: unknown) => void = () => {};
+    getJobExplanationMock.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+    );
+    return { settle: (value: unknown) => settle(value) };
+  }
+
+  it("counts the seconds while a generation is in flight", async () => {
+    pendingExplanation();
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      /Writing an explanation… 0s/,
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /Writing an explanation… 3s/,
+    );
+  });
+
+  it("explains the wait once it stops being unremarkable", async () => {
+    pendingExplanation();
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+    await screen.findByRole("status");
+
+    // Nothing at five seconds: a note that fires on every normal run is
+    // a note the user learns to ignore.
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText(/runs on a local model/i)).toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(16000);
+    });
+    // LEADS WITH WHAT IS STILL TRUE: the deterministic results above are
+    // complete and are not waiting for this.
+    expect(screen.getByText(/runs on a local model/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/scores and gaps are already complete/i),
+    ).toBeInTheDocument();
+  });
+
+  it("stops and clears the counter when the explanation arrives", async () => {
+    const pending = pendingExplanation();
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+    await screen.findByRole("status");
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    await act(async () => {
+      pending.settle(explanation());
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Writing an explanation…/)).toBeNull(),
+    );
+    // And it does not keep counting against a finished request.
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText(/Writing an explanation…/)).toBeNull();
+  });
+
+  it("stops the counter when the generation fails", async () => {
+    // A FAILURE ENDS IT IDENTICALLY. The caller clears its loading flag
+    // in a `finally`, and a stale count left under an error message
+    // would read as though something were still running.
+    getJobExplanationMock.mockRejectedValue(new Error("ollama went away"));
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText(/Writing an explanation…/)).toBeNull();
+  });
+
+  it("restarts from zero on a regenerate", async () => {
+    const first = pendingExplanation();
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Explain" }));
+    await screen.findByRole("status");
+    await act(async () => {
+      vi.advanceTimersByTime(7000);
+    });
+    await act(async () => {
+      first.settle(explanation());
+    });
+    await screen.findByRole("button", { name: "Regenerate" });
+
+    pendingExplanation();
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+    // ZERO, not seven: the previous run's number must not be inherited.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Writing an explanation… 0s/),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the button disabled while one generation is running", async () => {
+    // The existing duplicate-click guard, unchanged by the counter.
+    pendingExplanation();
+    render(
+      <JobExplanationPanel accessToken={ACCESS_TOKEN} savedJobId={JOB_ID} />,
+    );
+
+    const button = screen.getByRole("button", { name: "Explain" });
+    fireEvent.click(button);
+    await screen.findByRole("status");
+
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(getJobExplanationMock).toHaveBeenCalledTimes(1);
   });
 });

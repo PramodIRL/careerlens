@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 # prose and nothing was going to. Honest rather than blank, and it is a
 # new value of an existing field, not a new field.
 UNAVAILABLE_PROVIDER_NAME = "unavailable"
+# Reported when the caller ASKED FOR NO NARRATIVE, which is not a
+# failure and must not read as one. "unavailable" would say a provider
+# was reached for and could not be had; this says none was wanted, so a
+# client rendering a deterministic-only plan never shows a fault that
+# did not occur.
+NOT_REQUESTED_PROVIDER_NAME = "not_requested"
 
 
 def build_provider(

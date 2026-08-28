@@ -21,6 +21,10 @@ const getJobMatchMock = vi.fn();
 // Same reason as getJobMatch above: JobsSection now also renders a
 // JobGapPanel per job, which fetches on its own.
 const getJobGapsMock = vi.fn();
+// 7.2 F1: these two complete the set of four per-job panels, so the
+// disclosure tests below can count every request a job can make.
+const getJobEligibilityMock = vi.fn();
+const getJobSemanticMock = vi.fn();
 
 vi.mock("@/lib/api-client", async () => {
   const actual =
@@ -37,6 +41,8 @@ vi.mock("@/lib/api-client", async () => {
     reorderSavedJobs: (...args: unknown[]) => reorderSavedJobsMock(...args),
     getJobMatch: (...args: unknown[]) => getJobMatchMock(...args),
     getJobGaps: (...args: unknown[]) => getJobGapsMock(...args),
+    getJobEligibility: (...args: unknown[]) => getJobEligibilityMock(...args),
+    getJobSemantic: (...args: unknown[]) => getJobSemanticMock(...args),
   };
 });
 
@@ -119,7 +125,45 @@ beforeEach(() => {
       total_requirements: 0,
     },
   });
+  getJobEligibilityMock.mockReset().mockResolvedValue({
+    formula_version: "eligibility_v1",
+    flag: "unknown",
+    has_requirements: false,
+    has_qualification_profile: true,
+    totals: {
+      satisfied: 0,
+      not_satisfied: 0,
+      unknown: 0,
+      undetermined: 0,
+      total_requirements: 0,
+      required_not_satisfied: 0,
+    },
+    requirements: [],
+  });
+  getJobSemanticMock.mockReset().mockResolvedValue({
+    formula_version: "semantic_fit_v1",
+    fit: 0,
+    band: "none",
+    model_identifier: "mock",
+    considered: 0,
+    evidence: [],
+  });
 });
+
+/** Every per-job panel request, as one number. */
+function panelCalls() {
+  return {
+    match: getJobMatchMock.mock.calls.length,
+    gaps: getJobGapsMock.mock.calls.length,
+    eligibility: getJobEligibilityMock.mock.calls.length,
+    semantic: getJobSemanticMock.mock.calls.length,
+  };
+}
+
+/** Open one job's disclosure the way a user does. */
+function openJob(index = 0) {
+  fireEvent.click(screen.getAllByText("View match")[index]);
+}
 
 // --- loading / empty / list ------------------------------------------
 
@@ -844,5 +888,309 @@ describe("reporting collection changes", () => {
 
     await waitFor(() => expect(onJobsChanged).toHaveBeenCalled());
     expect(listSavedJobsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =====================================================================
+// 7.2 F1 — progressive disclosure that is real, not just visual
+//
+// <details> hides its children with CSS, but React MOUNTS them, so
+// every panel's fetch effect used to run behind a closed disclosure:
+// measured at four requests per saved job on load — 33 for eight jobs —
+// for content nobody had asked to see. These tests are the guard on
+// that, and they are written in terms of REQUESTS rather than markup,
+// because a panel that renders but does not fetch would be an equally
+// good fix and a panel that fetches invisibly is the actual bug.
+// =====================================================================
+
+describe("job detail panels are not loaded until they are opened", () => {
+  it("makes no panel request for a dashboard of closed jobs", async () => {
+    listSavedJobsMock.mockResolvedValue([
+      job({ id: "job-1" }),
+      job({ id: "job-2", title: "Data Engineer" }),
+      job({ id: "job-3", title: "Platform Engineer" }),
+    ]);
+
+    renderSection();
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(3),
+    );
+
+    // Every disclosure is genuinely closed — the panels are absent
+    // because they were never mounted, not because CSS hid them.
+    for (const summary of screen.getAllByText("View match")) {
+      expect(summary.closest("details")).not.toHaveAttribute("open");
+    }
+    expect(panelCalls()).toEqual({
+      match: 0,
+      gaps: 0,
+      eligibility: 0,
+      semantic: 0,
+    });
+  });
+
+  it("makes exactly that job's four requests when one is opened", async () => {
+    listSavedJobsMock.mockResolvedValue([
+      job({ id: "job-1" }),
+      job({ id: "job-2", title: "Data Engineer" }),
+    ]);
+
+    renderSection();
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(2),
+    );
+
+    openJob(0);
+
+    await waitFor(() => expect(getJobMatchMock).toHaveBeenCalledTimes(1));
+    // FOUR, AND FOUR ONLY. One job opened is one job's worth of work —
+    // the second job is still closed and has cost nothing.
+    expect(panelCalls()).toEqual({
+      match: 1,
+      gaps: 1,
+      eligibility: 1,
+      semantic: 1,
+    });
+    expect(getJobMatchMock).toHaveBeenCalledWith(ACCESS_TOKEN, "job-1");
+  });
+
+  it("does not refetch the first job when a second is opened", async () => {
+    listSavedJobsMock.mockResolvedValue([
+      job({ id: "job-1" }),
+      job({ id: "job-2", title: "Data Engineer" }),
+    ]);
+
+    renderSection();
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(2),
+    );
+
+    openJob(0);
+    await waitFor(() => expect(getJobMatchMock).toHaveBeenCalledTimes(1));
+
+    openJob(1);
+    await waitFor(() => expect(getJobMatchMock).toHaveBeenCalledTimes(2));
+
+    // TWO JOBS, TWO REQUESTS EACH — never three. Opening one job must
+    // not disturb another that is already open, which is what a shared
+    // key or a remount would cause.
+    expect(panelCalls()).toEqual({
+      match: 2,
+      gaps: 2,
+      eligibility: 2,
+      semantic: 2,
+    });
+    expect(getJobMatchMock.mock.calls.map((call) => call[1])).toEqual([
+      "job-1",
+      "job-2",
+    ]);
+  });
+
+  it("keeps both jobs open at once rather than behaving as an accordion", async () => {
+    // Comparing two jobs is the reason this is a set and not a single
+    // open id: opening the second must not close the first.
+    listSavedJobsMock.mockResolvedValue([
+      job({ id: "job-1" }),
+      job({ id: "job-2", title: "Data Engineer" }),
+    ]);
+
+    renderSection();
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(2),
+    );
+
+    openJob(0);
+    openJob(1);
+
+    for (const summary of screen.getAllByText("View match")) {
+      expect(summary.closest("details")).toHaveAttribute("open");
+    }
+  });
+
+  it("closes again on a second click, and reopening is the user's choice", async () => {
+    listSavedJobsMock.mockResolvedValue([job({ id: "job-1" })]);
+
+    renderSection();
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(1),
+    );
+
+    openJob(0);
+    await waitFor(() => expect(getJobMatchMock).toHaveBeenCalledTimes(1));
+
+    openJob(0);
+    expect(
+      screen.getByText("View match").closest("details"),
+    ).not.toHaveAttribute("open");
+    // Closing unmounts the panels; nothing is fetched on the way out.
+    expect(getJobMatchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =====================================================================
+// 7.2 F4 — each panel hears only the changes it can actually see
+//
+// One shared counter used to refetch all four panels for a change only
+// one of them could observe. What each panel reads is a fact about its
+// handler, so these tests assert the routing rather than the plumbing.
+// The job is OPENED first in each case: a closed job has no panels to
+// refresh, which F1 above already guarantees.
+// =====================================================================
+
+describe("refresh signals reach only the panels that can change", () => {
+  async function renderOneOpenJob(props: Record<string, number> = {}) {
+    listSavedJobsMock.mockResolvedValue([job({ id: "job-1" })]);
+    const view = render(<JobsSection accessToken={ACCESS_TOKEN} {...props} />);
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(1),
+    );
+    openJob(0);
+    await waitFor(() => expect(getJobMatchMock).toHaveBeenCalledTimes(1));
+    return view;
+  }
+
+  it("refreshes match and gaps when a skill is confirmed, and nothing else", async () => {
+    const { rerender } = await renderOneOpenJob({ matchRefreshKey: 0 });
+
+    rerender(<JobsSection accessToken={ACCESS_TOKEN} matchRefreshKey={1} />);
+
+    await waitFor(() => expect(getJobMatchMock).toHaveBeenCalledTimes(2));
+    // `/eligibility` never reads a skill row and `/semantic` reads
+    // stored embeddings, so neither can have moved.
+    expect(panelCalls()).toEqual({
+      match: 2,
+      gaps: 2,
+      eligibility: 1,
+      semantic: 1,
+    });
+  });
+
+  it("refreshes eligibility when qualifications change, and nothing else", async () => {
+    const { rerender } = await renderOneOpenJob({ eligibilityRefreshKey: 0 });
+
+    rerender(
+      <JobsSection accessToken={ACCESS_TOKEN} eligibilityRefreshKey={1} />,
+    );
+
+    await waitFor(() => expect(getJobEligibilityMock).toHaveBeenCalledTimes(2));
+    // Neither `/match` nor `/gaps` reads a qualification row.
+    expect(panelCalls()).toEqual({
+      match: 1,
+      gaps: 1,
+      eligibility: 2,
+      semantic: 1,
+    });
+  });
+
+  it("refreshes every panel when resume or GitHub work lands new evidence", async () => {
+    // THE ONE SIGNAL THAT REACHES ALL FOUR, and it should: async
+    // ingestion can write skills, evidence and embeddings, and can
+    // suggest qualification facts.
+    const { rerender } = await renderOneOpenJob({
+      matchRefreshKey: 0,
+      eligibilityRefreshKey: 0,
+      semanticRefreshKey: 0,
+    });
+
+    rerender(
+      <JobsSection
+        accessToken={ACCESS_TOKEN}
+        matchRefreshKey={1}
+        eligibilityRefreshKey={1}
+        semanticRefreshKey={1}
+      />,
+    );
+
+    await waitFor(() => expect(getJobSemanticMock).toHaveBeenCalledTimes(2));
+    expect(panelCalls()).toEqual({
+      match: 2,
+      gaps: 2,
+      eligibility: 2,
+      semantic: 2,
+    });
+  });
+
+  it("refreshes nothing for a job the user has not opened", async () => {
+    listSavedJobsMock.mockResolvedValue([job({ id: "job-1" })]);
+    const { rerender } = render(
+      <JobsSection accessToken={ACCESS_TOKEN} matchRefreshKey={0} />,
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText("View match")).toHaveLength(1),
+    );
+
+    rerender(<JobsSection accessToken={ACCESS_TOKEN} matchRefreshKey={1} />);
+
+    expect(panelCalls()).toEqual({
+      match: 0,
+      gaps: 0,
+      eligibility: 0,
+      semantic: 0,
+    });
+  });
+});
+
+// =====================================================================
+// 7.2 F5 — the saved-job count, reported rather than refetched
+// =====================================================================
+
+describe("reporting the saved-job count upward", () => {
+  it("reports the count once a list has actually arrived", async () => {
+    const onJobCountChange = vi.fn();
+    listSavedJobsMock.mockResolvedValue([
+      job({ id: "job-1" }),
+      job({ id: "job-2" }),
+    ]);
+
+    render(
+      <JobsSection
+        accessToken={ACCESS_TOKEN}
+        onJobCountChange={onJobCountChange}
+      />,
+    );
+
+    await waitFor(() => expect(onJobCountChange).toHaveBeenCalledWith(2));
+    // ONE LIST REQUEST for the page — the count costs nothing extra.
+    expect(listSavedJobsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the new count after a delete, without re-reading the list", async () => {
+    const onJobCountChange = vi.fn();
+    listSavedJobsMock.mockResolvedValue([job({ id: "job-1" })]);
+    deleteSavedJobMock.mockResolvedValue(undefined);
+
+    render(
+      <JobsSection
+        accessToken={ACCESS_TOKEN}
+        onJobCountChange={onJobCountChange}
+      />,
+    );
+    await waitFor(() => expect(onJobCountChange).toHaveBeenCalledWith(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(onJobCountChange).toHaveBeenCalledWith(0));
+    expect(listSavedJobsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing about the count when the list could not be loaded", async () => {
+    // NOT KNOWN IS NOT ZERO. Reporting 0 here would bound the roadmap's
+    // input to nothing on a transient error, which is a false statement
+    // about the user's data rather than a missing one.
+    const onJobCountChange = vi.fn();
+    listSavedJobsMock.mockRejectedValue(new ApiError(500, "server on fire"));
+
+    render(
+      <JobsSection
+        accessToken={ACCESS_TOKEN}
+        onJobCountChange={onJobCountChange}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "server on fire",
+    );
+    expect(onJobCountChange).not.toHaveBeenCalled();
   });
 });

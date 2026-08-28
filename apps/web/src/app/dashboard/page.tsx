@@ -63,6 +63,19 @@ export default function DashboardPage() {
   //                         changed", because only the first invalidates
   //                         a plan it has already drawn.
   const [jobsVersion, setJobsVersion] = useState(0);
+  //   jobCount              how many jobs JobsSection currently holds.
+  //                         NOT A VERSION and not fetched here: it is
+  //                         the list's own length, reported upward by
+  //                         the section that already has it, so the
+  //                         roadmap can bound its "jobs to prepare for"
+  //                         input without issuing a second identical
+  //                         `listSavedJobs` on every dashboard load.
+  //
+  //                         `null` until a list actually arrives, which
+  //                         is not the same as zero — the roadmap shows
+  //                         "—" for the first and "0 saved jobs" for
+  //                         the second.
+  const [jobCount, setJobCount] = useState<number | null>(null);
 
   // Stable identities — these are effect dependencies in the children,
   // so an inline arrow would re-run those effects on every render.
@@ -81,6 +94,11 @@ export default function DashboardPage() {
   );
 
   const handleJobsChanged = useCallback(() => setJobsVersion((n) => n + 1), []);
+
+  const handleJobCountChange = useCallback(
+    (count: number) => setJobCount(count),
+    [],
+  );
 
   // Protected navigation: the single redirect authority for leaving this
   // page whenever there's no valid session — covers both a mount-time
@@ -184,13 +202,30 @@ export default function DashboardPage() {
         <h2 className="mb-4 text-lg font-semibold text-black dark:text-zinc-50">
           Your saved jobs
         </h2>
-        {/* Job match scores depend on candidate skills, so they must
-            refetch when a skill is confirmed, rejected or added — the
-            same signals the skill sections already listen to. */}
+        {/* THREE SIGNALS, ROUTED — not one sum handed to four panels.
+            Each key carries only the changes its panel's handler can
+            actually observe, which is a fact about what those handlers
+            read (see JobsSectionProps):
+
+              match/gaps   skills moved (`profileVersion`) or async work
+                           landed evidence (`externalVersion`). A
+                           qualification edit cannot move them.
+              eligibility  the qualification profile moved, or async
+                           work landed a resume-derived suggestion.
+                           Confirming a skill cannot move it.
+              semantic     only new stored evidence changes it, which
+                           is `externalVersion` alone.
+
+            The sum this replaced meant one qualification edit refetched
+            every panel on every job — measured at twenty requests where
+            five were warranted. */}
         <JobsSection
           accessToken={accessToken}
-          refreshKey={externalVersion + profileVersion + qualificationVersion}
+          matchRefreshKey={externalVersion + profileVersion}
+          eligibilityRefreshKey={externalVersion + qualificationVersion}
+          semanticRefreshKey={externalVersion}
           onJobsChanged={handleJobsChanged}
+          onJobCountChange={handleJobCountChange}
         />
       </div>
 
@@ -199,14 +234,15 @@ export default function DashboardPage() {
           here. Generated only on an explicit click — see
           RoadmapSection. */}
       <div className="w-full max-w-sm">
-        {/* TWO SIGNALS, because they mean different things. `refreshKey`
-            says the candidate's evidence moved, so the next plan will
-            differ. `jobsVersion` says the jobs the plan is ABOUT moved —
-            which re-bounds "jobs to prepare for" and retires a plan
-            already on screen. */}
+        {/* `jobsVersion` still says the jobs the plan is ABOUT moved,
+            which retires a plan already on screen — unchanged from
+            7.1(c). What went away is the section's own `refreshKey`:
+            it existed only to re-run a `listSavedJobs` this page now
+            supplies as `savedJobCount`, so a skill or qualification
+            edit no longer refetches a list neither can change. */}
         <RoadmapSection
           accessToken={accessToken}
-          refreshKey={externalVersion + profileVersion + qualificationVersion}
+          savedJobCount={jobCount}
           jobsVersion={jobsVersion}
         />
       </div>

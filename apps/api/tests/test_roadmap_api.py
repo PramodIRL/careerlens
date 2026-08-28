@@ -900,3 +900,164 @@ def test_a_matched_skill_never_becomes_a_step(client: TestClient) -> None:
 
     assert "AWS" not in _names(payload)
     assert all(not step["step_id"].startswith("AWS") for step in _steps(payload))
+
+
+# =====================================================================
+# Prompt 7.2 F2 — the plan must not wait for a model
+#
+# The route computed the whole deterministic schedule and then held it
+# behind `narrate()`, which can run to `explanation_timeout_seconds`
+# (180) against a local model generating at roughly ten tokens a
+# second. `narrate=false` returns the finished plan at the point it is
+# finished, which is what lets a client render the schedule immediately
+# and attach prose when it arrives.
+# =====================================================================
+
+
+def _deterministic_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Everything the plan asserts WITHOUT a model.
+
+    Written as a projection rather than a field list so a new
+    deterministic field is covered the day it is added: the narrative
+    keys are named once, here, and everything else is compared.
+    """
+    written = {"task", "outcome", "success_criteria", "done_when"}
+
+    def strip_item(item: dict[str, Any]) -> dict[str, Any]:
+        kept = {key: value for key, value in item.items() if key not in written}
+        kept["steps"] = [
+            {key: value for key, value in step.items() if key not in written}
+            for step in item["steps"]
+        ]
+        return kept
+
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"narrative_status", "reason", "provider", "overview", "weeks"}
+    } | {
+        "weeks": [
+            {
+                key: value
+                for key, value in week.items()
+                if key not in {"focus", "checkpoint", "items"}
+            }
+            | {"items": [strip_item(item) for item in week["items"]]}
+            for week in payload["weeks"]
+        ]
+    }
+
+
+def test_narrate_false_returns_the_whole_deterministic_plan(client: TestClient) -> None:
+    """THE POINT OF THE FLAG. Everything the user needs to start work is
+    present; only the wording is absent."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    plan = _roadmap(client, token, narrate=False)
+
+    assert plan["narrative_status"] == "skipped"
+    assert plan["provider"] == "not_requested"
+    assert plan["overview"] is None
+
+    # The plan itself, in full.
+    assert plan["has_selected_jobs"] is True
+    assert plan["selected_job_count"] == 1
+    assert plan["coverage"]
+    assert plan["weeks"]
+    items = _items(plan)
+    assert items
+    for item in items:
+        # Priorities, day spans, states, reasons and affected jobs — the
+        # substance, all of it decided without a model.
+        assert item["skill_name"]
+        assert item["state"]
+        assert item["score"]
+        assert item["why"]
+        assert item["affected_jobs"]
+        assert item["start_day"] and item["end_day"]
+        assert item["steps"]
+        for step in item["steps"]:
+            assert step["phase"]
+            assert step["start_day"] and step["end_day"]
+        # And only the written layer is missing.
+        assert item["task"] is None
+        assert item["success_criteria"] is None
+
+
+def test_narrate_false_never_reaches_for_a_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NOT BUILT, NOT CALLED. A provider that is merely fast would hide
+    the regression this guards: the assertion is that the factory is
+    never invoked at all, so no timeout, no cold model load and no
+    provider fault can reach a request that asked for none."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    calls: list[str] = []
+
+    def _explode() -> object:
+        calls.append("built")
+        raise AssertionError("narrate=false must not construct a provider")
+
+    monkeypatch.setattr("app.api.v1.roadmap.get_roadmap_provider", _explode)
+
+    plan = _roadmap(client, token, narrate=False)
+
+    assert calls == []
+    assert plan["narrative_status"] == "skipped"
+
+
+def test_narrated_and_unnarrated_plans_are_deterministically_identical(
+    client: TestClient,
+) -> None:
+    """THE GUARANTEE THE TWO-PHASE CLIENT RESTS ON. If these could
+    differ, attaching prose to an already-rendered schedule would move
+    the schedule under the reader — a day span shifting or an item
+    changing rank as the wording lands."""
+    _seed_taxonomy()
+    token, user_id = _new_user(client)
+    _give_skill(user_id, "Python", "suggested")
+    _give_skill(user_id, "Docker", "confirmed")
+    _create_job(client, token, _AWS_JOB, company="Acme")
+    _create_job(client, token, _DOCKER_JOB, company="Globex")
+
+    narrated = _roadmap(client, token, narrate=True)
+    skipped = _roadmap(client, token, narrate=False)
+
+    assert _deterministic_view(narrated) == _deterministic_view(skipped)
+    # And the narrated one really did produce wording, so this is not
+    # two empty plans agreeing with each other.
+    assert narrated["narrative_status"] == "generated"
+    assert narrated["overview"]
+    assert skipped["overview"] is None
+
+
+def test_narrate_defaults_to_true_for_existing_callers(client: TestClient) -> None:
+    """BACKWARD COMPATIBILITY, ASSERTED. Every client written before
+    this flag existed sends no `narrate` at all."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+    _create_job(client, token, _AWS_JOB)
+
+    plan = _roadmap(client, token)
+
+    assert plan["narrative_status"] == "generated"
+    assert plan["provider"] != "not_requested"
+
+
+def test_narrate_false_on_an_empty_plan_is_still_not_a_failure(client: TestClient) -> None:
+    """No saved jobs and no narrative wanted: two different kinds of
+    nothing, and neither is an error."""
+    _seed_taxonomy()
+    token, _ = _new_user(client)
+
+    plan = _roadmap(client, token, narrate=False)
+
+    assert plan["narrative_status"] == "skipped"
+    assert plan["reason"] == "no_selected_jobs"
+    assert plan["provider"] == "not_requested"
+    assert plan["has_selected_jobs"] is False
