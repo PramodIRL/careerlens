@@ -1,0 +1,26 @@
+name: Build API image
+on:
+  push:
+    branches: [main]
+    paths: ["apps/api/**", ".github/workflows/deploy-api.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          push: true
+          tags: |
+            ghcr.io/pramodirl/careerlens-api:latest
+            ghcr.io/pramodirl/careerlens-api:${{ github.sha }}
