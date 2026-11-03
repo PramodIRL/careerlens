@@ -83,7 +83,7 @@ export default function JobSemanticPanel({
 
   if (loading) {
     return (
-      <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-xs text-muted">
         Looking for related evidence…
       </p>
     );
@@ -94,7 +94,7 @@ export default function JobSemanticPanel({
   // unaffected. Said plainly and quietly instead.
   if (error && !semantic) {
     return (
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         Related evidence is unavailable right now.
       </p>
     );
@@ -104,7 +104,7 @@ export default function JobSemanticPanel({
 
   if (semantic.considered === 0) {
     return (
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         This job has not been indexed for related evidence yet.
       </p>
     );
@@ -113,36 +113,34 @@ export default function JobSemanticPanel({
   return (
     <section className="flex flex-col gap-2">
       <div className="flex items-baseline gap-2">
-        <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+        <h4 className="text-xs font-semibold text-foreground">
           Semantic relevance
         </h4>
-        <span className="text-xs text-zinc-700 dark:text-zinc-300">
+        <span className="text-xs text-foreground/80">
           {BAND_LABEL[semantic.band] ?? semantic.band}
         </span>
       </div>
 
       {/* The load-bearing sentence. A reader must not leave this panel
           believing it asserts the candidate has a skill. */}
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         Supporting evidence only — this does not confirm the candidate has a
         skill. Skill matches are shown above.
       </p>
 
       {semantic.evidence.length === 0 ? (
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
-          No closely related evidence found.
-        </p>
+        <p className="text-xs text-muted">No closely related evidence found.</p>
       ) : (
         <ul className="flex flex-col gap-1">
           {semantic.evidence.map((row) => (
             <li
               key={row.embedding_id}
-              className="rounded bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800"
+              className="rounded-lg bg-surface-2 px-2 py-1 text-xs"
             >
-              <p className="text-zinc-900 dark:text-zinc-100">
+              <p className="text-foreground">
                 {row.excerpt ?? "(no excerpt stored)"}
               </p>
-              <p className="text-zinc-600 dark:text-zinc-400">
+              <p className="text-muted">
                 {sourceLabel(row)} · similarity {row.similarity.toFixed(2)}
               </p>
             </li>

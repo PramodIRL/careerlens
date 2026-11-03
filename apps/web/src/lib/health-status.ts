@@ -1,9 +1,9 @@
 export type HealthStatus = "checking" | "ok" | "error";
 
 export const STATUS_STYLES: Record<HealthStatus, string> = {
-  checking: "bg-zinc-200 text-zinc-800",
-  ok: "bg-green-100 text-green-800",
-  error: "bg-red-100 text-red-800",
+  checking: "bg-surface-2 text-muted",
+  ok: "bg-green-500/10 text-green-700 dark:text-green-400",
+  error: "bg-red-500/10 text-red-700 dark:text-red-400",
 };
 
 export const STATUS_LABEL: Record<HealthStatus, string> = {

@@ -41,10 +41,10 @@ const STATUS_LABELS: Record<ResumeStatus, string> = {
 };
 
 const STATUS_CLASSES: Record<ResumeStatus, string> = {
-  queued: "text-zinc-500 dark:text-zinc-400",
-  processing: "text-blue-600 dark:text-blue-400",
-  succeeded: "text-green-700 dark:text-green-400",
-  failed: "text-red-700 dark:text-red-400",
+  queued: "text-muted",
+  processing: "text-accent",
+  succeeded: "text-success",
+  failed: "text-danger",
 };
 
 function formatFileSize(bytes: number): string {
@@ -199,7 +199,7 @@ export default function ResumeSection({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading resumes…
       </p>
     );
@@ -213,7 +213,7 @@ export default function ResumeSection({
           ref={errorRef}
           role="alert"
           tabIndex={-1}
-          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
         >
           {error}
         </p>
@@ -222,7 +222,7 @@ export default function ResumeSection({
       <div className="flex flex-col gap-1">
         <label
           htmlFor="resume-upload"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Upload resume
         </label>
@@ -234,32 +234,27 @@ export default function ResumeSection({
           disabled={uploading}
           onChange={handleFileChange}
           aria-describedby="resume-upload-hint"
-          className="rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className="rounded-lg border border-border px-3 py-2 text-sm"
         />
-        <p
-          id="resume-upload-hint"
-          className="text-xs text-zinc-500 dark:text-zinc-500"
-        >
+        <p id="resume-upload-hint" className="text-xs text-muted">
           {uploading ? "Uploading…" : "PDF or DOCX, up to 5 MB."}
         </p>
       </div>
 
       {resumes.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          No resumes uploaded yet.
-        </p>
+        <p className="text-sm text-muted">No resumes uploaded yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {resumes.map((resume) => (
             <li
               key={resume.id}
-              className="flex items-center justify-between gap-3 rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700"
+              className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 bg-surface-2/40"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-black dark:text-zinc-50">
+                <p className="truncate text-sm font-medium text-foreground">
                   {resume.original_filename}
                 </p>
-                <p className="text-xs text-zinc-500 dark:text-zinc-500">
+                <p className="text-xs text-muted">
                   {formatFileSize(resume.file_size_bytes)} ·{" "}
                   <span className={STATUS_CLASSES[resume.status]}>
                     {STATUS_LABELS[resume.status]}
@@ -267,7 +262,7 @@ export default function ResumeSection({
                   · {formatDate(resume.created_at)}
                 </p>
                 {resume.status === "failed" && resume.error_message && (
-                  <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                  <p className="mt-1 text-xs text-danger">
                     {resume.error_message}
                   </p>
                 )}
@@ -275,7 +270,7 @@ export default function ResumeSection({
               <button
                 type="button"
                 onClick={() => handleDelete(resume.id)}
-                className="shrink-0 rounded border border-red-300 px-3 py-1 text-sm text-red-700 dark:border-red-800 dark:text-red-400"
+                className="shrink-0 rounded-lg border border-danger/40 px-3 py-1 text-sm text-danger hover:bg-danger/10"
               >
                 Delete
               </button>

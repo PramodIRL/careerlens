@@ -7,6 +7,8 @@ import { useRef, useState, type FormEvent } from "react";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 
+import AuthCard from "../auth-card";
+
 export default function RegisterPage() {
   const { register, login } = useAuth();
   const router = useRouter();
@@ -36,79 +38,78 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-zinc-50 p-8 dark:bg-black">
-      <div className="w-full max-w-sm">
-        <h1 className="mb-6 text-2xl font-semibold text-black dark:text-zinc-50">
-          Create your account
-        </h1>
-        <form
-          onSubmit={handleSubmit}
-          noValidate
-          className="flex flex-col gap-4"
-        >
-          {error && (
-            <p
-              id="form-error"
-              ref={errorRef}
-              role="alert"
-              tabIndex={-1}
-              className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
-            >
-              {error}
-            </p>
-          )}
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor="email"
-              className="text-sm font-medium text-black dark:text-zinc-50"
-            >
-              Email
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              required
-              autoComplete="email"
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? "form-error" : undefined}
-              className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor="password"
-              className="text-sm font-medium text-black dark:text-zinc-50"
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              required
-              minLength={8}
-              autoComplete="new-password"
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? "form-error" : undefined}
-              className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
-          >
-            {submitting ? "Creating account…" : "Create account"}
-          </button>
-        </form>
-        <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+    <AuthCard
+      title="Create your account"
+      subtitle="Start turning your experience into evidence."
+      footer={
+        <>
           Already have an account?{" "}
-          <Link href="/login" className="underline">
+          <Link
+            href="/login"
+            className="font-medium text-accent hover:underline"
+          >
             Log in
           </Link>
-        </p>
-      </div>
-    </main>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+        {error && (
+          <p
+            id="form-error"
+            ref={errorRef}
+            role="alert"
+            tabIndex={-1}
+            className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
+          >
+            {error}
+          </p>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="email"
+            className="text-sm font-medium text-foreground"
+          >
+            Email
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            required
+            autoComplete="email"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "form-error" : undefined}
+            className="rounded-lg border border-border px-3 py-2.5 text-sm"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="password"
+            className="text-sm font-medium text-foreground"
+          >
+            Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            required
+            minLength={8}
+            autoComplete="new-password"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "form-error" : undefined}
+            className="rounded-lg border border-border px-3 py-2.5 text-sm"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="mt-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground shadow-sm shadow-accent/30 hover:bg-accent/90 disabled:opacity-50"
+        >
+          {submitting ? "Creating account…" : "Create account"}
+        </button>
+      </form>
+    </AuthCard>
   );
 }

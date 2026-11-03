@@ -76,10 +76,9 @@ const STATE_LABEL: Record<RoadmapGapState, string> = {
 };
 
 const STATE_CLASS: Record<RoadmapGapState, string> = {
-  missing_required: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
-  missing_preferred:
-    "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  weak_evidence: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  missing_required: "bg-danger/10 text-danger",
+  missing_preferred: "bg-warning/10 text-warning",
+  weak_evidence: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
 };
 
 /** Why the wording is missing. The priorities are unaffected either
@@ -125,17 +124,13 @@ const PHASE_LABEL: Record<RoadmapStepPhase, string> = {
 };
 
 const PHASE_CLASS: Record<RoadmapStepPhase, string> = {
-  learn:
-    "bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300",
-  practice: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
-  build:
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
-  prove:
-    "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300",
-  self_check:
-    "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  demonstrate: "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300",
-  document: "bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-300",
+  learn: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
+  practice: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  build: "bg-success/10 text-success",
+  prove: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+  self_check: "bg-warning/10 text-warning",
+  demonstrate: "bg-teal-500/15 text-teal-700 dark:text-teal-300",
+  document: "bg-surface-2 text-foreground",
 };
 
 function dayRange(startDay: number, endDay: number): string {
@@ -284,17 +279,14 @@ export default function RoadmapSection({
   }
 
   return (
-    <section
-      aria-labelledby="roadmap-heading"
-      className="rounded border border-zinc-200 p-4 dark:border-zinc-800"
-    >
+    <section aria-labelledby="roadmap-heading" className="card p-5 sm:p-6">
       <h2
         id="roadmap-heading"
-        className="text-sm font-semibold text-black dark:text-zinc-50"
+        className="text-lg font-semibold tracking-tight text-foreground"
       >
         Learning roadmap
       </h2>
-      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="mt-1 text-xs text-muted">
         A day-by-day plan built from your saved jobs and the gaps in your
         evidence. CareerLens decides what to work on and when; the written
         guidance turns that into steps. It changes as your jobs and skills
@@ -305,7 +297,7 @@ export default function RoadmapSection({
         <div className="flex flex-col gap-1">
           <label
             htmlFor="roadmap-top-n"
-            className="text-xs font-medium text-black dark:text-zinc-50"
+            className="text-xs font-medium text-foreground"
           >
             Jobs to prepare for
           </label>
@@ -321,9 +313,9 @@ export default function RoadmapSection({
                   clampTopN(Number(event.target.value), savedJobCount ?? 0),
                 )
               }
-              className="w-20 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className="w-20 rounded-lg border border-border px-2 py-1 text-xs"
             />
-            <span className="text-xs text-zinc-600 dark:text-zinc-400">
+            <span className="text-xs text-muted">
               of {savedJobCount ?? "—"} saved{" "}
               {savedJobCount === 1 ? "job" : "jobs"}
             </span>
@@ -333,7 +325,7 @@ export default function RoadmapSection({
         <div className="flex flex-col gap-1">
           <label
             htmlFor="roadmap-days"
-            className="text-xs font-medium text-black dark:text-zinc-50"
+            className="text-xs font-medium text-foreground"
           >
             Days available
           </label>
@@ -344,14 +336,14 @@ export default function RoadmapSection({
             max={MAX_DURATION_DAYS}
             value={durationDays}
             onChange={(event) => setDurationDays(Number(event.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="w-24 rounded-lg border border-border px-2 py-1 text-xs"
           />
         </div>
 
         <div className="flex flex-col gap-1">
           <label
             htmlFor="roadmap-hours"
-            className="text-xs font-medium text-black dark:text-zinc-50"
+            className="text-xs font-medium text-foreground"
           >
             Hours per day
           </label>
@@ -363,7 +355,7 @@ export default function RoadmapSection({
             step={0.5}
             value={hoursPerDay}
             onChange={(event) => setHoursPerDay(Number(event.target.value))}
-            className="w-24 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="w-24 rounded-lg border border-border px-2 py-1 text-xs"
           />
         </div>
 
@@ -371,7 +363,7 @@ export default function RoadmapSection({
           type="button"
           onClick={generate}
           disabled={loading}
-          className="rounded bg-black px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-zinc-50 dark:text-black"
+          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground disabled:opacity-50 shadow-sm hover:bg-accent/90"
         >
           {loading ? "Building…" : "Generate roadmap"}
         </button>
@@ -389,7 +381,7 @@ export default function RoadmapSection({
       </div>
 
       {error && (
-        <p role="alert" className="mt-3 text-xs text-red-700 dark:text-red-400">
+        <p role="alert" className="mt-3 text-xs text-danger">
           {error}
         </p>
       )}
@@ -401,10 +393,7 @@ export default function RoadmapSection({
           persist a plan for. Saying why, and what to do about it, beats
           both silently clearing it and silently keeping it. */}
       {roadmap && outdated ? (
-        <p
-          role="status"
-          className="mt-3 text-xs text-amber-800 dark:text-amber-300"
-        >
+        <p role="status" className="mt-3 text-xs text-warning">
           Your saved jobs changed after this plan was made, so it is no longer
           shown — it was built from the jobs you had before. Generate the
           roadmap again for an up-to-date plan.
@@ -433,7 +422,7 @@ function RoadmapPlan({
 }) {
   if (!roadmap.has_selected_jobs) {
     return (
-      <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="mt-3 text-xs text-muted">
         You have not saved any jobs yet. Save a posting and the roadmap will
         show what to work on first.
       </p>
@@ -443,17 +432,15 @@ function RoadmapPlan({
   return (
     <div className="mt-4 flex flex-col gap-4">
       {roadmap.overview && (
-        <p className="text-sm text-black dark:text-zinc-50">
-          {roadmap.overview}
-        </p>
+        <p className="text-sm text-foreground">{roadmap.overview}</p>
       )}
 
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         {roadmap.selected_job_count} of {roadmap.saved_job_count} saved{" "}
         {roadmap.saved_job_count === 1 ? "job" : "jobs"} ·{" "}
         {roadmap.duration_days} days · {roadmap.hours_per_day} hours/day · about{" "}
         {roadmap.total_hours} hours in total{" "}
-        <span className="text-zinc-500 dark:text-zinc-500">(estimated)</span>
+        <span className="text-muted">(estimated)</span>
       </p>
 
       {/* HONEST, NOT APOLOGETIC. No single skill is stretched past a
@@ -461,7 +448,7 @@ function RoadmapPlan({
           Saying so beats padding the plan with work the candidate's own
           jobs never asked for. */}
       {roadmap.coverage === "partial" && roadmap.scheduled_days > 0 && (
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
+        <p className="text-xs text-muted">
           Your saved jobs justify {roadmap.scheduled_days} days of focused work,
           so {roadmap.unscheduled_days} of the {roadmap.duration_days} you asked
           for are left unscheduled. Rather than stretch these skills to fill the
@@ -475,7 +462,7 @@ function RoadmapPlan({
           being written and is the only thing outstanding. A reader who
           sees this knows they can start now. */}
       {narrating && roadmap.narrative_status === "skipped" && (
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
+        <p className="text-xs text-muted">
           Your priorities and schedule below are complete — they are calculated
           from your own saved jobs and evidence, not written by a model. Written
           mentoring guidance is being added and will appear here; you can start
@@ -486,7 +473,7 @@ function RoadmapPlan({
       {/* The narrative request itself failed. Same loss as a rejection
           below, reached a different way, so it says the same thing. */}
       {narrativeFailed && (
-        <p className="text-xs text-amber-800 dark:text-amber-300">
+        <p className="text-xs text-warning">
           Your priorities and schedule below are complete — they are calculated
           from your own saved jobs and evidence, not written by a model. The
           written guidance could not be produced this time — the explanation
@@ -495,7 +482,7 @@ function RoadmapPlan({
       )}
 
       {roadmap.narrative_status === "rejected" && (
-        <p className="text-xs text-amber-800 dark:text-amber-300">
+        <p className="text-xs text-warning">
           {/* Same reordering as the explanation panel: the plan below is
               the product, the wording is the optional extra. Opening with
               the failure made a working feature look broken. */}
@@ -515,18 +502,16 @@ function RoadmapPlan({
 
 function WeekBlock({ week }: { week: RoadmapWeek }) {
   return (
-    <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-      <h3 className="text-xs font-semibold text-black dark:text-zinc-50">
+    <div className="border-t border-border pt-3">
+      <h3 className="text-xs font-semibold text-foreground">
         {week.label}
         {week.focus && (
-          <span className="ml-2 font-normal text-zinc-600 dark:text-zinc-400">
-            {week.focus}
-          </span>
+          <span className="ml-2 font-normal text-muted">{week.focus}</span>
         )}
       </h3>
 
       {week.items.length === 0 ? (
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="mt-1 text-xs text-muted">
           Nothing scheduled for this week — your saved jobs did not produce
           enough to fill it.
         </p>
@@ -540,7 +525,7 @@ function WeekBlock({ week }: { week: RoadmapWeek }) {
           {/* The end-of-week check: a capability the candidate can test
               themselves against, not a box to tick. */}
           {week.checkpoint && (
-            <p className="mt-3 rounded bg-zinc-100 p-2 text-xs text-black dark:bg-zinc-900 dark:text-zinc-50">
+            <p className="mt-3 rounded-lg bg-surface-2 p-2 text-xs text-foreground">
               ✓ {week.checkpoint}
             </p>
           )}
@@ -560,23 +545,21 @@ function WeekBlock({ week }: { week: RoadmapWeek }) {
  */
 function StepRow({ step }: { step: RoadmapStep }) {
   return (
-    <li className="border-l-2 border-zinc-200 pl-3 dark:border-zinc-800">
+    <li className="border-l-2 border-border pl-3">
       <div className="flex flex-wrap items-baseline gap-2">
         <span
-          className={`rounded px-1.5 py-0.5 text-[11px] ${PHASE_CLASS[step.phase]}`}
+          className={`rounded-md px-1.5 py-0.5 text-[11px] ${PHASE_CLASS[step.phase]}`}
         >
           {PHASE_LABEL[step.phase]}
         </span>
-        <span className="text-[11px] text-zinc-500 dark:text-zinc-500">
+        <span className="text-[11px] text-muted">
           {dayRange(step.start_day, step.end_day)} · about{" "}
           {step.estimated_hours} hours (estimated)
         </span>
       </div>
-      {step.task && (
-        <p className="mt-1 text-xs text-black dark:text-zinc-50">{step.task}</p>
-      )}
+      {step.task && <p className="mt-1 text-xs text-foreground">{step.task}</p>}
       {step.done_when && (
-        <p className="mt-0.5 text-[11px] text-zinc-600 dark:text-zinc-400">
+        <p className="mt-0.5 text-[11px] text-muted">
           Done when: {step.done_when}
         </p>
       )}
@@ -595,12 +578,10 @@ function Detail({
 }) {
   return (
     <details className="mt-1">
-      <summary className="cursor-pointer text-[11px] text-zinc-600 dark:text-zinc-400">
+      <summary className="cursor-pointer text-[11px] text-muted">
         {label}
       </summary>
-      <div className="mt-1 text-xs text-zinc-700 dark:text-zinc-300">
-        {children}
-      </div>
+      <div className="mt-1 text-xs text-foreground/80">{children}</div>
     </details>
   );
 }
@@ -620,40 +601,38 @@ function RoadmapEntry({ item }: { item: RoadmapItem }) {
   const others = item.affected_jobs.length - 1;
 
   return (
-    <li className="rounded border border-zinc-200 p-3 dark:border-zinc-800">
+    <li className="rounded-lg border border-border p-3 bg-surface-2/40">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="flex items-center gap-2">
-          <span className="text-sm font-medium text-black dark:text-zinc-50">
+          <span className="text-sm font-medium text-foreground">
             {item.skill_name}
           </span>
           {/* Kept on the collapsed card rather than buried: "missing"
               and "evidence not reviewed" call for different work, and
               that is mentoring information, not metadata. */}
           <span
-            className={`rounded px-1.5 py-0.5 text-[11px] ${STATE_CLASS[item.state]}`}
+            className={`rounded-md px-1.5 py-0.5 text-[11px] ${STATE_CLASS[item.state]}`}
           >
             {STATE_LABEL[item.state]}
           </span>
         </span>
-        <span className="text-[11px] text-zinc-500 dark:text-zinc-500">
+        <span className="text-[11px] text-muted">
           {dayRange(item.start_day, item.end_day)} · about{" "}
           {item.estimated_hours} hours (estimated)
         </span>
       </div>
 
       {/* WHAT TO DO */}
-      {item.task && (
-        <p className="mt-1 text-xs text-black dark:text-zinc-50">{item.task}</p>
-      )}
+      {item.task && <p className="mt-1 text-xs text-foreground">{item.task}</p>}
       {/* WHAT YOU END UP WITH */}
       {item.outcome && (
-        <p className="mt-1 text-xs text-zinc-700 dark:text-zinc-300">
+        <p className="mt-1 text-xs text-foreground/80">
           You&rsquo;ll finish with: {item.outcome}
         </p>
       )}
       {/* WHO IT IS FOR — one line; the full list is a disclosure below. */}
       {lead && (
-        <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+        <p className="mt-1 text-[11px] text-muted">
           Helps {lead.company} (#{lead.priority_rank})
           {others > 0 &&
             ` and ${others} other ${others === 1 ? "job" : "jobs"}`}
@@ -704,7 +683,7 @@ function RoadmapEntry({ item }: { item: RoadmapItem }) {
             {item.evidence.map((row) => (
               <li
                 key={row.evidence_id}
-                className="border-l-2 border-zinc-300 pl-2 dark:border-zinc-700"
+                className="border-l-2 border-border pl-2"
               >
                 <span className="font-medium">{row.source_type}</span>
                 {row.excerpt ? `: “${row.excerpt}”` : null}

@@ -279,7 +279,7 @@ export default function QualificationsSection({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading your qualifications…
       </p>
     );
@@ -287,7 +287,7 @@ export default function QualificationsSection({
 
   if (loaded === null) {
     return error !== null ? (
-      <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+      <p role="alert" className="text-xs text-danger">
         {error}
       </p>
     ) : null;
@@ -299,7 +299,7 @@ export default function QualificationsSection({
     return (
       <div className="flex flex-col gap-3">
         {!anyKnown ? (
-          <p className="text-xs text-zinc-600 dark:text-zinc-400">
+          <p className="text-xs text-muted">
             You have not added any qualifications yet. Jobs that state entry
             requirements will show what they need once you do.
           </p>
@@ -313,9 +313,7 @@ export default function QualificationsSection({
                 <span
                   aria-hidden="true"
                   className={
-                    value === null
-                      ? "mr-2 text-zinc-500 dark:text-zinc-500"
-                      : "mr-2 text-emerald-700 dark:text-emerald-400"
+                    value === null ? "mr-2 text-muted" : "mr-2 text-success"
                   }
                 >
                   {value === null ? "—" : "✓"}
@@ -323,18 +321,14 @@ export default function QualificationsSection({
                 <span className="sr-only">
                   {value === null ? "not provided: " : "provided: "}
                 </span>
-                <span className="inline-block w-28 text-zinc-700 dark:text-zinc-300">
+                <span className="inline-block w-28 text-foreground/80">
                   {row.heading}
                 </span>
                 {value === null ? (
-                  <span className="text-zinc-500 dark:text-zinc-500">
-                    Not provided
-                  </span>
+                  <span className="text-muted">Not provided</span>
                 ) : (
                   <>
-                    <span className="font-medium text-black dark:text-zinc-50">
-                      {value}
-                    </span>
+                    <span className="font-medium text-foreground">{value}</span>
                   </>
                 )}
               </li>
@@ -343,7 +337,7 @@ export default function QualificationsSection({
         </ul>
 
         {error !== null ? (
-          <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+          <p role="alert" className="text-xs text-danger">
             {error}
           </p>
         ) : null}
@@ -351,7 +345,7 @@ export default function QualificationsSection({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="self-start rounded border border-zinc-300 px-3 py-1 text-sm dark:border-zinc-700"
+          className="self-start rounded-lg border border-border px-3 py-1 text-sm hover:bg-surface-2"
         >
           Review / Edit
         </button>
@@ -363,7 +357,7 @@ export default function QualificationsSection({
     <div>
       <label
         htmlFor={`qualification-${key}`}
-        className="block text-xs text-zinc-700 dark:text-zinc-300"
+        className="block text-xs text-foreground/80"
       >
         {text}
       </label>
@@ -373,11 +367,9 @@ export default function QualificationsSection({
         inputMode="decimal"
         value={draft[key]}
         onChange={(event) => set(key, event.target.value)}
-        className="mt-1 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        className="mt-1 w-full rounded-lg border border-border px-2 py-1 text-sm"
       />
-      {hint ? (
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">{hint}</p>
-      ) : null}
+      {hint ? <p className="mt-1 text-xs text-muted">{hint}</p> : null}
     </div>
   );
 
@@ -389,7 +381,7 @@ export default function QualificationsSection({
     <div>
       <label
         htmlFor={`qualification-${key}`}
-        className="block text-xs text-zinc-700 dark:text-zinc-300"
+        className="block text-xs text-foreground/80"
       >
         {text}
       </label>
@@ -397,7 +389,7 @@ export default function QualificationsSection({
         id={`qualification-${key}`}
         value={draft[key]}
         onChange={(event) => set(key, event.target.value)}
-        className="mt-1 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        className="mt-1 w-full rounded-lg border border-border px-2 py-1 text-sm"
       >
         <option value="">Not set</option>
         {options.map((option) => (
@@ -411,7 +403,7 @@ export default function QualificationsSection({
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         These are used to check every saved job&apos;s entry requirements, so
         you only enter them once. Blank stays <strong>unknown</strong> — never
         counted against you.
@@ -433,7 +425,7 @@ export default function QualificationsSection({
       </div>
 
       {error !== null ? (
-        <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+        <p role="alert" className="text-xs text-danger">
           {error}
         </p>
       ) : null}
@@ -442,7 +434,7 @@ export default function QualificationsSection({
         <button
           type="submit"
           disabled={saving}
-          className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+          className="rounded-lg bg-accent px-3 py-1 text-sm text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90"
         >
           {saving ? "Saving…" : "Save qualifications"}
         </button>
@@ -453,7 +445,7 @@ export default function QualificationsSection({
             setEditing(false);
             setError(null);
           }}
-          className="rounded border border-zinc-300 px-3 py-1 text-sm dark:border-zinc-700"
+          className="rounded-lg border border-border px-3 py-1 text-sm hover:bg-surface-2"
         >
           Cancel
         </button>

@@ -2062,4 +2062,54 @@ Add one entry per decision, most recent first.
   CLOSED: the score, the categories and the gap list stay on screen and
   only the written paragraph is withheld.
 
+- **Date**: 2026-11-03
+- **Decision**: Add an OPT-IN, bring-your-own-key OpenRouter provider
+  for two new features only: the AI career assistant
+  (`POST /api/v1/ai/chat`) and the resume tailor
+  (`POST /api/v1/ai/tailor`). This narrows, and does not reverse, the
+  2026-08-27 "no hosted provider, no API key" decision: the explanation
+  and roadmap prose still run on the mock or the local Ollama daemon,
+  and that path is unchanged.
+- **Problem**: A chat agent that calls tools over the user's data, and a
+  tailor that rewrites real resume bullets, both need a model that is
+  good at tool calling and structured JSON. A local 7B model is slow and
+  unreliable at both, and the 2026-08-27 objection to hosted models was
+  about who PAYS, not about hosted models as such.
+- **Why bring-your-own-key answers that objection**: the user pastes
+  their own OpenRouter key into the browser's Settings panel. It lives
+  in localStorage and travels per request in the `X-OpenRouter-Key`
+  header, so every request is billed to the person making it. Nothing
+  meters against a developer key, which was the architectural reason a
+  shared free tier was rejected. A server fallback
+  (`OPENROUTER_API_KEY`) exists for a single-user local setup and is
+  empty by default; with no key from either source every AI route is a
+  400 ("Add your OpenRouter key in Settings") and nothing is called.
+- **Alternatives**: (1) the existing Ollama daemon, kept for
+  explanations but too slow and too weak at multi-step tool calling for
+  a chat; (2) a developer-paid hosted key, rejected on 2026-08-27 and
+  still rejected; (3) a direct provider SDK, rejected because OpenRouter
+  is OpenAI-compatible, lets the user pick any model, and needs only the
+  `httpx` already in the tree.
+- **Trade-off, stated plainly (privacy)**: when the user uses these two
+  features, their resume text, profile, skills and saved job details are
+  sent to OpenRouter and to whichever model provider it routes to. That
+  is new: until now no candidate data left the host. It is opt-in per
+  user, the Settings panel says so in plain words, and nothing is sent
+  without a key. The key itself is never logged, never stored in the
+  database and never echoed in an error (upstream messages are scrubbed
+  of it, and our 401-shaped failures become 400s so the web client does
+  not mistake them for an expired session).
+- **Guard rails kept from the rest of the product**: tools are
+  read-only and call the existing route handlers with the authenticated
+  user, so ownership is enforced by the same code as everywhere else;
+  the loop is capped at 6 model calls; the tailor's JSON is validated
+  with one retry, and a draft that writes a skill the candidate lacks
+  into a bullet, keyword or summary is rejected rather than shown.
+- **Outcome**: Default model `anthropic/claude-haiku-5.5` (tool calling
+  and structured output, checked against OpenRouter's public model list
+  on 2026-11-03). No migration, no new dependency, no stored chat
+  history. `tests/test_llm_provider_config.py`'s credential allowlist
+  now names `openrouter_api_key` explicitly, so any further secret
+  setting is still noticed.
+
 <!-- Add new entries above this line, most recent first. -->

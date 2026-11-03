@@ -219,10 +219,12 @@ def test_no_credential_setting_exists() -> None:
         name for name in fields if "api_key" in name or "secret" in name or name.endswith("_token")
     }
 
-    # The auth secrets that legitimately exist are named explicitly, so
-    # a new one cannot be added to this product without this assertion
-    # noticing.
-    assert secret_shaped == {"jwt_secret"}
+    # The secrets that legitimately exist are named explicitly, so a new
+    # one cannot be added to this product without this assertion
+    # noticing. `openrouter_api_key` (2026-11-03) is the opt-in,
+    # empty-by-default fallback for the assistant and tailor only; the
+    # explanation providers below still have no credential.
+    assert secret_shaped == {"jwt_secret", "openrouter_api_key"}
     assert "explanation_api_key" not in fields
     assert "ollama_api_key" not in fields
 

@@ -73,7 +73,7 @@ function ClaimList({ claims }: { claims: ExplanationClaim[] }) {
   return (
     <ul className="flex flex-col gap-1">
       {claims.map((claim, index) => (
-        <li key={index} className="text-xs text-black dark:text-zinc-50">
+        <li key={index} className="text-xs text-foreground">
           {claim.text}
         </li>
       ))}
@@ -96,15 +96,15 @@ function SupportingEvidence({ evidence }: { evidence: CitedEvidence[] }) {
   if (evidence.length === 0) return null;
 
   return (
-    <details className="border-t border-zinc-200 pt-2 dark:border-zinc-800">
-      <summary className="cursor-pointer text-xs text-zinc-600 dark:text-zinc-400">
+    <details className="border-t border-border pt-2">
+      <summary className="cursor-pointer text-xs text-muted">
         Supporting evidence ({evidence.length})
       </summary>
       <ul className="mt-2 flex flex-col gap-2">
         {evidence.map((row) => (
           <li
             key={row.evidence_id}
-            className="border-l-2 border-zinc-300 pl-2 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+            className="border-l-2 border-border pl-2 text-xs text-muted"
           >
             <span className="font-medium">{row.source_type}</span>
             {row.excerpt ? `: “${row.excerpt}”` : null}
@@ -140,14 +140,14 @@ export default function JobExplanationPanel({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <h4 className="text-xs font-semibold text-black dark:text-zinc-50">
+        <h4 className="text-xs font-semibold text-foreground">
           Explain this match
         </h4>
         <button
           type="button"
           onClick={load}
           disabled={loading}
-          className="rounded border border-zinc-300 px-2 py-1 text-xs text-black disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50"
+          className="rounded-lg border border-border px-2 py-1 text-xs text-foreground disabled:opacity-50 hover:bg-surface-2"
         >
           {explanation ? "Regenerate" : "Explain"}
         </button>
@@ -161,13 +161,13 @@ export default function JobExplanationPanel({
       <GenerationProgress running={loading} label="Writing an explanation…" />
 
       {error && (
-        <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+        <p role="alert" className="text-xs text-danger">
           {error}
         </p>
       )}
 
       {explanation && explanation.status === "rejected" && (
-        <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
+        <p role="status" className="text-xs text-muted">
           {/* LEADS WITH WHAT WORKS. The score and gaps are complete and
               always were — only the optional written summary failed, and
               copy that opens with the failure makes a working feature
@@ -184,19 +184,17 @@ export default function JobExplanationPanel({
         <div className="flex flex-col gap-3">
           {/* Says plainly what this is, for a reader who lands on the
               prose without context. */}
-          <p className="text-xs text-zinc-600 dark:text-zinc-400">
+          <p className="text-xs text-muted">
             Written from your stored match facts and checked against them.
             Guidance, not a hiring decision — the score above is unchanged by
             it.
           </p>
           {explanation.summary && (
-            <p className="text-xs text-black dark:text-zinc-50">
-              {explanation.summary}
-            </p>
+            <p className="text-xs text-foreground">{explanation.summary}</p>
           )}
           {explanation.strengths.length > 0 && (
             <div>
-              <h5 className="mb-1 text-xs font-medium text-black dark:text-zinc-50">
+              <h5 className="mb-1 text-xs font-medium text-foreground">
                 Strengths
               </h5>
               <ClaimList claims={explanation.strengths} />
@@ -204,18 +202,16 @@ export default function JobExplanationPanel({
           )}
           {explanation.gaps.length > 0 && (
             <div>
-              <h5 className="mb-1 text-xs font-medium text-black dark:text-zinc-50">
-                Gaps
-              </h5>
+              <h5 className="mb-1 text-xs font-medium text-foreground">Gaps</h5>
               <ClaimList claims={explanation.gaps} />
             </div>
           )}
           {explanation.next_steps.length > 0 && (
             <div>
-              <h5 className="mb-1 text-xs font-medium text-black dark:text-zinc-50">
+              <h5 className="mb-1 text-xs font-medium text-foreground">
                 Next steps
               </h5>
-              <ul className="list-disc pl-4 text-xs text-black dark:text-zinc-50">
+              <ul className="list-disc pl-4 text-xs text-foreground">
                 {explanation.next_steps.map((step, index) => (
                   <li key={index}>{step}</li>
                 ))}
