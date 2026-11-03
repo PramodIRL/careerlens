@@ -7,6 +7,9 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "@/lib/auth-context";
 
 import BrandMark from "../brand-mark";
+import AiSettingsPanel from "./ai/ai-settings-panel";
+import AssistantPanel from "./ai/assistant-panel";
+import TailorPanel from "./ai/tailor-panel";
 import GitHubSection from "./github-section";
 import JobsSection from "./jobs-section";
 import RoadmapSection from "./roadmap-section";
@@ -425,21 +428,17 @@ export default function DashboardPage() {
         </div>
 
         <div className={show("assistant")}>
-          <div className="card p-5 sm:p-6">
-            <div data-slot="ai-assistant" />
-          </div>
+          <AssistantPanel accessToken={accessToken} />
         </div>
 
         <div className={show("tailor")}>
-          <div className="card p-5 sm:p-6">
-            <div data-slot="resume-tailor" />
-          </div>
+          {/* Mounted only while open: it lists saved jobs on mount, and
+              the page must list them exactly once on load. */}
+          {view === "tailor" && <TailorPanel accessToken={accessToken} />}
         </div>
 
         <div className={show("settings")}>
-          <div className="card p-5 sm:p-6">
-            <div data-slot="ai-settings" />
-          </div>
+          <AiSettingsPanel />
         </div>
       </main>
     </div>

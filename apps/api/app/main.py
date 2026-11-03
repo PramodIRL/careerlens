@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.ai import router as ai_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.candidate_skill import router as candidate_skill_router
 from app.api.v1.github_connection import router as github_connection_router
@@ -81,3 +82,7 @@ app.include_router(github_ingestion_router, prefix="/api/v1/github-connection")
 # prefix instead of extending /candidate-skills. Read-only and not
 # persisted; nothing here writes a row.
 app.include_router(roadmap_router, prefix="/api/v1/roadmap")
+# AI career assistant + resume tailor (2026-11-03). Opt-in, bring your
+# own OpenRouter key: with no key every route here is a 400 and nothing
+# is called. Read-only over the caller's own rows; nothing is persisted.
+app.include_router(ai_router, prefix="/api/v1/ai")

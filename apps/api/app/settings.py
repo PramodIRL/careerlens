@@ -236,6 +236,26 @@ class Settings(BaseSettings):
     # is decoration.
     explanation_retry_backoff_seconds: float = 0.5
 
+    # --- OpenRouter, bring your own key (assistant + tailor) ---------
+    # OPT-IN AND SCOPED. Only the AI career assistant and the resume
+    # tailor (app/assistant/) call a hosted model; the explanation and
+    # roadmap paths above are unchanged and still use the mock/Ollama
+    # providers. See docs/decisions.md (2026-11-03).
+    #
+    # The key normally arrives PER REQUEST in the `X-OpenRouter-Key`
+    # header, typed by the user into the browser's Settings panel. This
+    # setting is only a server-side fallback for a single-user local
+    # deployment, and is EMPTY by default: with no header and no setting
+    # the AI routes answer 400 rather than calling anything. The key is
+    # never logged, never stored in the database and never echoed in an
+    # error message.
+    openrouter_api_key: str = ""
+    # Used when the request sends no `X-OpenRouter-Model`. Must support
+    # tool calling, which the assistant's read-only data tools need.
+    openrouter_model: str = "anthropic/claude-haiku-5.5"
+    # OpenAI-compatible base URL. Override only to point at a local stub.
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy DSN built from the settings above."""
