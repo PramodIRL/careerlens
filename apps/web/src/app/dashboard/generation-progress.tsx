@@ -72,14 +72,14 @@ function ElapsedNotice({ label }: { label: string }) {
           second; keeping the note outside `role="status"` means a
           screen reader hears the count without the explanation being
           repeated at it. */}
-      <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-xs text-muted">
         {label} {seconds}s
       </p>
       {seconds >= SLOW_AFTER_SECONDS && (
         // LEADS WITH WHAT IS STILL TRUE. The deterministic results are
         // already on screen and are not waiting on this, which is the
         // fact that makes a long wait tolerable rather than alarming.
-        <p className="text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="text-xs text-muted">
           This runs on a local model and can take a couple of minutes. Your
           scores and gaps are already complete and are not waiting for it.
         </p>

@@ -117,7 +117,7 @@ function PublicDataNotice() {
   return (
     <p
       id={PUBLIC_DATA_NOTICE_ID}
-      className="rounded border border-zinc-300 bg-zinc-100 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+      className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-xs text-foreground/80"
     >
       <span className="font-semibold">We only analyze public data.</span>{" "}
       CareerLens never asks for your GitHub password and never requests access
@@ -318,7 +318,7 @@ export default function GitHubSection({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading GitHub connection…
       </p>
     );
@@ -329,7 +329,7 @@ export default function GitHubSection({
       {error && (
         <p
           role="alert"
-          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
         >
           {error}
         </p>
@@ -339,17 +339,17 @@ export default function GitHubSection({
 
       {connection ? (
         <div className="flex flex-col gap-2">
-          <div className="flex items-start justify-between gap-3 rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700">
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2 bg-surface-2/40">
             <div className="min-w-0">
               <a
                 href={`https://github.com/${connection.username}`}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="truncate text-sm font-medium text-black underline dark:text-zinc-50"
+                className="truncate text-sm font-medium text-foreground underline"
               >
                 {connection.username}
               </a>
-              <p className="text-xs text-zinc-500 dark:text-zinc-500">
+              <p className="text-xs text-muted">
                 {connection.public_repo_count}{" "}
                 {connection.public_repo_count === 1
                   ? "public repository"
@@ -358,7 +358,7 @@ export default function GitHubSection({
               {/* The repository count is a snapshot, so it is always
                   shown next to when it was taken rather than presented
                   as a current figure. */}
-              <p className="text-xs text-zinc-500 dark:text-zinc-500">
+              <p className="text-xs text-muted">
                 Last checked {formatDate(connection.last_verified_at)}
               </p>
             </div>
@@ -366,21 +366,18 @@ export default function GitHubSection({
               type="button"
               onClick={handleDisconnect}
               disabled={busy}
-              className="shrink-0 rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50 dark:border-red-800 dark:text-red-400"
+              className="shrink-0 rounded-lg border border-danger/40 px-2 py-1 text-xs text-danger disabled:opacity-50 hover:bg-danger/10"
             >
               {busy ? "Disconnecting…" : "Disconnect"}
             </button>
           </div>
-          <p className="text-xs text-zinc-500 dark:text-zinc-500">
+          <p className="text-xs text-muted">
             Connecting a different account replaces this one.
           </p>
 
-          <div className="flex flex-col gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+          <div className="flex flex-col gap-2 border-t border-border pt-3">
             {run && isActive(run) ? (
-              <p
-                role="status"
-                className="text-sm text-blue-600 dark:text-blue-400"
-              >
+              <p role="status" className="text-sm text-accent">
                 {progressLabel(run)}
               </p>
             ) : (
@@ -388,7 +385,7 @@ export default function GitHubSection({
                 type="button"
                 onClick={handleImport}
                 disabled={importing || busy}
-                className="self-start rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+                className="self-start rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90"
               >
                 {importing
                   ? "Starting…"
@@ -399,13 +396,11 @@ export default function GitHubSection({
             )}
 
             {run && run.status === "succeeded" && (
-              <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                {importSummary(run)}
-              </p>
+              <p className="text-xs text-muted">{importSummary(run)}</p>
             )}
 
             {run && run.status === "failed" && (
-              <p className="text-xs text-red-700 dark:text-red-400">
+              <p className="text-xs text-danger">
                 {run.error_message ?? "The import failed — try again."}
               </p>
             )}
@@ -415,27 +410,27 @@ export default function GitHubSection({
                 {repositories.map((repository) => (
                   <li
                     key={repository.id}
-                    className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700"
+                    className="rounded-lg border border-border px-3 py-2 bg-surface-2/40"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <a
                         href={`https://github.com/${repository.full_name}`}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="truncate text-sm font-medium text-black underline dark:text-zinc-50"
+                        className="truncate text-sm font-medium text-foreground underline"
                       >
                         {repository.name}
                       </a>
-                      <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-500">
+                      <span className="shrink-0 text-xs text-muted">
                         ★ {repository.stargazers_count}
                       </span>
                     </div>
                     {repository.description && (
-                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                      <p className="mt-1 text-xs text-muted">
                         {repository.description}
                       </p>
                     )}
-                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                    <p className="mt-1 text-xs text-muted">
                       {repository.primary_language ?? "No language detected"}
                       {repository.is_fork && " · Fork"}
                       {/* Says plainly when a repository was listed but
@@ -444,7 +439,7 @@ export default function GitHubSection({
                       {!repository.detail_fetched && " · Basic details only"}
                     </p>
                     {repository.topics.length > 0 && (
-                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                      <p className="mt-1 text-xs text-muted">
                         {repository.topics.join(" · ")}
                       </p>
                     )}
@@ -458,7 +453,7 @@ export default function GitHubSection({
         <form onSubmit={handleConnect} className="flex flex-col gap-1">
           <label
             htmlFor="github-username"
-            className="text-sm font-medium text-black dark:text-zinc-50"
+            className="text-sm font-medium text-foreground"
           >
             GitHub username
           </label>
@@ -477,12 +472,12 @@ export default function GitHubSection({
               disabled={busy}
               placeholder="octocat"
               aria-describedby={PUBLIC_DATA_NOTICE_ID}
-              className="min-w-0 flex-1 rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className="min-w-0 flex-1 rounded-lg border border-border px-3 py-2 text-sm"
             />
             <button
               type="submit"
               disabled={busy || !username.trim()}
-              className="shrink-0 rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+              className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90"
             >
               {busy ? "Connecting…" : "Connect"}
             </button>

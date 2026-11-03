@@ -421,7 +421,7 @@ export default function JobsSection({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading saved jobs…
       </p>
     );
@@ -432,7 +432,7 @@ export default function JobsSection({
       {error && (
         <p
           role="alert"
-          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
         >
           {error}
         </p>
@@ -459,8 +459,8 @@ export default function JobsSection({
             }}
             className={
               mode === option.value
-                ? "rounded bg-black px-3 py-1 text-sm text-white dark:bg-white dark:text-black"
-                : "rounded border border-zinc-300 px-3 py-1 text-sm text-black disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-50"
+                ? "rounded-lg bg-accent px-3 py-1 text-sm text-accent-foreground font-medium shadow-sm hover:bg-accent/90"
+                : "rounded-lg border border-border px-3 py-1 text-sm text-foreground disabled:opacity-50 hover:bg-surface-2"
             }
           >
             {option.label}
@@ -472,7 +472,7 @@ export default function JobsSection({
         <div className="flex flex-col gap-1">
           <label
             htmlFor="import-pdf"
-            className="text-sm font-medium text-black dark:text-zinc-50"
+            className="text-sm font-medium text-foreground"
           >
             Job description PDF
           </label>
@@ -484,12 +484,9 @@ export default function JobsSection({
             disabled={importing}
             onChange={handlePdfImport}
             aria-describedby="import-pdf-hint"
-            className="rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            className="rounded-lg border border-border px-3 py-2 text-sm"
           />
-          <p
-            id="import-pdf-hint"
-            className="text-xs text-zinc-500 dark:text-zinc-500"
-          >
+          <p id="import-pdf-hint" className="text-xs text-muted">
             {importing
               ? "Reading your PDF…"
               : "PDF only. We read the text, show you a draft, and do not keep the file."}
@@ -502,7 +499,7 @@ export default function JobsSection({
         // knows these values came from a machine and need checking.
         <div
           role="status"
-          className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-200"
+          className="rounded-lg bg-accent/10 px-3 py-2 text-sm text-accent"
         >
           <p className="font-medium">Check these details before saving.</p>
           {draftNotes.length > 0 && (
@@ -515,7 +512,7 @@ export default function JobsSection({
         </div>
       )}
 
-      <form onSubmit={handleCreate} className="flex flex-col gap-3">
+      <form onSubmit={handleCreate} className="grid gap-3 sm:grid-cols-2">
         <JobFields
           idPrefix="new-job"
           values={values}
@@ -525,7 +522,7 @@ export default function JobsSection({
         <button
           type="submit"
           disabled={saving || !values.company.trim() || !values.title.trim()}
-          className="self-start rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+          className="justify-self-start rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90 sm:col-span-2"
         >
           {saving ? "Saving…" : "Save job"}
         </button>
@@ -534,13 +531,13 @@ export default function JobsSection({
       <button
         type="button"
         onClick={load}
-        className="self-start rounded border border-zinc-300 px-3 py-1 text-sm text-black dark:border-zinc-700 dark:text-zinc-50"
+        className="self-start rounded-lg border border-border px-3 py-1 text-sm text-foreground hover:bg-surface-2"
       >
         Refresh
       </button>
 
       {jobs.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="text-sm text-muted">
           No saved jobs yet. Paste a job description above to save your first
           one.
         </p>
@@ -549,12 +546,12 @@ export default function JobsSection({
           {jobs.map((job, index) => (
             <li
               key={job.id}
-              className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700"
+              className="rounded-xl border border-border bg-surface-2/40 px-4 py-3"
             >
               {editingId === job.id ? (
                 <form
                   onSubmit={(event) => handleUpdate(event, job.id)}
-                  className="flex flex-col gap-3"
+                  className="grid gap-3 sm:grid-cols-2"
                   aria-label={`Edit ${job.title}`}
                 >
                   <JobFields
@@ -563,18 +560,18 @@ export default function JobsSection({
                     onChange={setEditValues}
                     disabled={busyId === job.id}
                   />
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 sm:col-span-2">
                     <button
                       type="submit"
                       disabled={busyId === job.id}
-                      className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+                      className="rounded-lg bg-accent px-3 py-1 text-sm text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90"
                     >
                       {busyId === job.id ? "Saving…" : "Save changes"}
                     </button>
                     <button
                       type="button"
                       onClick={() => setEditingId(null)}
-                      className="rounded border border-zinc-300 px-3 py-1 text-sm text-black dark:border-zinc-700 dark:text-zinc-50"
+                      className="rounded-lg border border-border px-3 py-1 text-sm text-foreground hover:bg-surface-2"
                     >
                       Cancel
                     </button>
@@ -583,22 +580,20 @@ export default function JobsSection({
               ) : (
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-black dark:text-zinc-50">
+                    <p className="truncate font-medium text-foreground">
                       {/* The rank is this job's INDEX in the list, not a
                           stored number — which is why deleting a job
                           never leaves a hole in the numbering. */}
-                      <span className="mr-1 text-zinc-500 dark:text-zinc-500">
-                        #{index + 1}
-                      </span>
+                      <span className="mr-1 text-muted">#{index + 1}</span>
                       {job.title}
                     </p>
-                    <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
+                    <p className="truncate text-xs text-muted">
                       {job.company}
                       {job.location && ` · ${job.location}`}
                       {job.employment_type &&
                         ` · ${EMPLOYMENT_LABELS[job.employment_type]}`}
                     </p>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-500">
+                    <p className="text-xs text-muted">
                       Saved {formatDate(job.created_at)}
                     </p>
                     {/* The user's own priority order, which is what the
@@ -611,7 +606,7 @@ export default function JobsSection({
                         onClick={() => handleMove(index, -1)}
                         disabled={index === 0}
                         aria-label={`Move ${job.title} up in priority`}
-                        className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-black disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-50"
+                        className="rounded-md border border-border px-1.5 py-0.5 text-xs text-foreground disabled:opacity-40 hover:bg-surface-2"
                       >
                         ↑
                       </button>
@@ -620,7 +615,7 @@ export default function JobsSection({
                         onClick={() => handleMove(index, 1)}
                         disabled={index === jobs.length - 1}
                         aria-label={`Move ${job.title} down in priority`}
-                        className="rounded border border-zinc-300 px-1.5 py-0.5 text-xs text-black disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-50"
+                        className="rounded-md border border-border px-1.5 py-0.5 text-xs text-foreground disabled:opacity-40 hover:bg-surface-2"
                       >
                         ↓
                       </button>
@@ -632,7 +627,7 @@ export default function JobsSection({
                         href={job.source_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-xs text-blue-700 underline dark:text-blue-400"
+                        className="text-xs text-accent underline"
                       >
                         View posting
                       </a>
@@ -642,7 +637,7 @@ export default function JobsSection({
                     <button
                       type="button"
                       onClick={() => startEditing(job)}
-                      className="rounded border border-zinc-300 px-2 py-1 text-xs text-black dark:border-zinc-700 dark:text-zinc-50"
+                      className="rounded-lg border border-border px-2 py-1 text-xs text-foreground hover:bg-surface-2"
                     >
                       Edit
                     </button>
@@ -652,14 +647,14 @@ export default function JobsSection({
                           type="button"
                           disabled={busyId === job.id}
                           onClick={() => handleDelete(job.id)}
-                          className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50 dark:border-red-800 dark:text-red-400"
+                          className="rounded-lg border border-danger/40 px-2 py-1 text-xs text-danger disabled:opacity-50 hover:bg-danger/10"
                         >
                           {busyId === job.id ? "Deleting…" : "Confirm delete"}
                         </button>
                         <button
                           type="button"
                           onClick={() => setConfirmingId(null)}
-                          className="rounded border border-zinc-300 px-2 py-1 text-xs text-black dark:border-zinc-700 dark:text-zinc-50"
+                          className="rounded-lg border border-border px-2 py-1 text-xs text-foreground hover:bg-surface-2"
                         >
                           Cancel
                         </button>
@@ -668,7 +663,7 @@ export default function JobsSection({
                       <button
                         type="button"
                         onClick={() => setConfirmingId(job.id)}
-                        className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 dark:border-red-800 dark:text-red-400"
+                        className="rounded-lg border border-danger/40 px-2 py-1 text-xs text-danger hover:bg-danger/10"
                       >
                         Delete
                       </button>
@@ -702,14 +697,14 @@ export default function JobsSection({
                 // click too, so Enter and Space still work.
                 <details
                   open={openJobIds.has(job.id)}
-                  className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-800"
+                  className="mt-2 border-t border-border pt-2"
                 >
                   <summary
                     onClick={(event) => {
                       event.preventDefault();
                       toggleJob(job.id);
                     }}
-                    className="cursor-pointer text-xs font-medium text-black dark:text-zinc-50"
+                    className="cursor-pointer text-xs font-medium text-accent"
                   >
                     View match
                   </summary>
@@ -724,8 +719,8 @@ export default function JobsSection({
                         disclosure: "how well do I match" and "what am I
                         missing" are two readings of one answer, and both
                         come from the same shared resolver server-side. */}
-                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                        <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
+                      <div className="border-t border-border pt-3">
+                        <h4 className="mb-2 text-xs font-semibold text-foreground">
                           Skill gaps
                         </h4>
                         <JobGapPanel
@@ -738,8 +733,8 @@ export default function JobsSection({
                         it. "82% skill match" and "does not meet the
                         CGPA bar" are different kinds of claim, and the
                         two are never combined into one number. */}
-                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
-                        <h4 className="mb-2 text-xs font-semibold text-black dark:text-zinc-50">
+                      <div className="border-t border-border pt-3">
+                        <h4 className="mb-2 text-xs font-semibold text-foreground">
                           Eligibility
                         </h4>
                         <JobEligibilityPanel
@@ -754,7 +749,7 @@ export default function JobsSection({
                         either. Its own panel carries the wording that
                         keeps it from being mistaken for skill
                         ownership. */}
-                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                      <div className="border-t border-border pt-3">
                         <JobSemanticPanel
                           accessToken={accessToken}
                           savedJobId={job.id}
@@ -765,7 +760,7 @@ export default function JobsSection({
                         claim on the page: it explains the numbers above
                         and must never appear to produce them, so it
                         loads only when the user asks for it. */}
-                      <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                      <div className="border-t border-border pt-3">
                         <JobExplanationPanel
                           accessToken={accessToken}
                           savedJobId={job.id}
@@ -801,15 +796,14 @@ function JobFields({
   const set = (field: keyof JobFormValues) => (value: string) =>
     onChange({ ...values, [field]: value });
 
-  const inputClass =
-    "rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
+  const inputClass = "rounded-lg border border-border px-3 py-2 text-sm";
 
   return (
     <>
       <div className="flex flex-col gap-1">
         <label
           htmlFor={`${idPrefix}-company`}
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Company
         </label>
@@ -827,7 +821,7 @@ function JobFields({
       <div className="flex flex-col gap-1">
         <label
           htmlFor={`${idPrefix}-title`}
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Job title
         </label>
@@ -845,7 +839,7 @@ function JobFields({
       <div className="flex flex-col gap-1">
         <label
           htmlFor={`${idPrefix}-location`}
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Location
         </label>
@@ -862,7 +856,7 @@ function JobFields({
       <div className="flex flex-col gap-1">
         <label
           htmlFor={`${idPrefix}-employment_type`}
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Employment type
         </label>
@@ -882,10 +876,10 @@ function JobFields({
         </select>
       </div>
 
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1 sm:col-span-2">
         <label
           htmlFor={`${idPrefix}-source_url`}
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Link to posting
         </label>
@@ -898,19 +892,16 @@ function JobFields({
           aria-describedby={`${idPrefix}-source_url-hint`}
           className={inputClass}
         />
-        <p
-          id={`${idPrefix}-source_url-hint`}
-          className="text-xs text-zinc-500 dark:text-zinc-500"
-        >
+        <p id={`${idPrefix}-source_url-hint`} className="text-xs text-muted">
           Optional. We store the link so you can find the posting again — we
           never open it.
         </p>
       </div>
 
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1 sm:col-span-2">
         <label
           htmlFor={`${idPrefix}-description`}
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Job description
         </label>
@@ -925,10 +916,7 @@ function JobFields({
           aria-describedby={`${idPrefix}-description-hint`}
           className={inputClass}
         />
-        <p
-          id={`${idPrefix}-description-hint`}
-          className="text-xs text-zinc-500 dark:text-zinc-500"
-        >
+        <p id={`${idPrefix}-description-hint`} className="text-xs text-muted">
           Paste the posting. Stored exactly as you enter it.
         </p>
       </div>

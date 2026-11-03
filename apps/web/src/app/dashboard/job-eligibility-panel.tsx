@@ -47,10 +47,10 @@ const STATE_MARKS: Record<EligibilityState, string> = {
 };
 
 const STATE_STYLES: Record<EligibilityState, string> = {
-  satisfied: "text-emerald-700 dark:text-emerald-400",
-  not_satisfied: "text-red-700 dark:text-red-400",
-  unknown: "text-zinc-600 dark:text-zinc-400",
-  undetermined: "text-zinc-600 dark:text-zinc-400",
+  satisfied: "text-success",
+  not_satisfied: "text-danger",
+  unknown: "text-muted",
+  undetermined: "text-muted",
 };
 
 const STATE_WORDS: Record<EligibilityState, string> = {
@@ -76,17 +76,17 @@ const REASON_TEXT: Record<string, string> = {
 const FLAG_TEXT = {
   eligible: {
     label: "Meets all requirements",
-    tone: "text-emerald-700 dark:text-emerald-400",
+    tone: "text-success",
     mark: "✓",
   },
   not_eligible: {
     label: "Not eligible",
-    tone: "text-red-700 dark:text-red-400",
+    tone: "text-danger",
     mark: "✗",
   },
   unknown: {
     label: "Unknown",
-    tone: "text-zinc-700 dark:text-zinc-300",
+    tone: "text-foreground/80",
     mark: "?",
   },
 } as const;
@@ -210,7 +210,7 @@ export default function JobEligibilityPanel({
 
   if (loading) {
     return (
-      <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-xs text-muted">
         Checking eligibility…
       </p>
     );
@@ -218,7 +218,7 @@ export default function JobEligibilityPanel({
 
   if (error !== null) {
     return (
-      <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+      <p role="alert" className="text-xs text-danger">
         {error}
       </p>
     );
@@ -231,9 +231,7 @@ export default function JobEligibilityPanel({
   // "not eligible" would be simply false.
   if (!eligibility.has_requirements) {
     return (
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
-        No eligibility requirements detected
-      </p>
+      <p className="text-xs text-muted">No eligibility requirements detected</p>
     );
   }
 
@@ -244,10 +242,10 @@ export default function JobEligibilityPanel({
   if (!eligibility.has_qualification_profile) {
     return (
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-semibold text-black dark:text-zinc-50">
+        <p className="text-xs font-semibold text-foreground">
           Qualification profile not set up
         </p>
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
+        <p className="text-xs text-muted">
           Add your qualifications to check whether you meet this job&apos;s
           requirements.
         </p>
@@ -255,7 +253,7 @@ export default function JobEligibilityPanel({
             without any JavaScript of ours. */}
         <a
           href="#qualifications"
-          className="self-start rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-black dark:border-zinc-700 dark:text-zinc-50"
+          className="self-start rounded-lg border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-surface-2"
         >
           Set up eligibility
         </a>
@@ -282,7 +280,7 @@ export default function JobEligibilityPanel({
           return (
             <li
               key={entry.requirement_type}
-              className="text-xs text-zinc-700 dark:text-zinc-300"
+              className="text-xs text-foreground/80"
             >
               <span
                 aria-hidden="true"
@@ -297,20 +295,15 @@ export default function JobEligibilityPanel({
                   held to: "8.2 / 10 ≥ 7.5" reads as a comparison, where
                   the reverse reads as a demand. */}
               {mine !== null ? (
-                <span className="text-black dark:text-zinc-50">
+                <span className="text-foreground">
                   {mine}
                   {comparison === "" ? "" : ` ${comparison}`}
                 </span>
               ) : (
-                <span className="text-zinc-500 dark:text-zinc-500">
-                  Not provided
-                </span>
+                <span className="text-muted">Not provided</span>
               )}
               {entry.requirement_level === "preferred" ? (
-                <span className="text-zinc-500 dark:text-zinc-500">
-                  {" "}
-                  · preferred
-                </span>
+                <span className="text-muted"> · preferred</span>
               ) : null}
               <span className="sr-only"> — {STATE_WORDS[entry.state]}</span>
               {/* The reason line is suppressed when the row already
@@ -318,7 +311,7 @@ export default function JobEligibilityPanel({
               {entry.state !== "satisfied" &&
               mine !== null &&
               entry.reason in REASON_TEXT ? (
-                <span className="block pl-5 text-zinc-500 dark:text-zinc-500">
+                <span className="block pl-5 text-muted">
                   {REASON_TEXT[entry.reason]}
                 </span>
               ) : null}
@@ -327,7 +320,7 @@ export default function JobEligibilityPanel({
         })}
       </ul>
 
-      <p className="text-xs text-zinc-500 dark:text-zinc-500">
+      <p className="text-xs text-muted">
         {totals.satisfied} met · {totals.not_satisfied} not met ·{" "}
         {totals.unknown + totals.undetermined} unknown ·{" "}
         {eligibility.formula_version}

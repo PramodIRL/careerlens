@@ -82,7 +82,7 @@ export default function JobMatchPanel({
 
   if (loading) {
     return (
-      <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-xs text-muted">
         Calculating match…
       </p>
     );
@@ -92,7 +92,7 @@ export default function JobMatchPanel({
     return (
       <p
         role="alert"
-        className="rounded bg-red-100 px-3 py-2 text-xs text-red-800"
+        className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
       >
         {error}
       </p>
@@ -105,7 +105,7 @@ export default function JobMatchPanel({
     // NOT "0% match" — that would be a claim about the candidate, when
     // the truth is a fact about the job.
     return (
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         No skill requirements detected in this job description.
       </p>
     );
@@ -116,7 +116,7 @@ export default function JobMatchPanel({
       {error && (
         <p
           role="alert"
-          className="rounded bg-red-100 px-3 py-2 text-xs text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
         >
           {error}
         </p>
@@ -124,25 +124,21 @@ export default function JobMatchPanel({
 
       <div className="flex items-baseline gap-2">
         <p
-          className="text-2xl font-semibold tabular-nums text-black dark:text-zinc-50"
+          className="text-2xl font-semibold tabular-nums text-foreground"
           // Read as words, not as a bare number next to a symbol.
           aria-label={`${match.overall_score} percent match`}
         >
           {match.overall_score}%
         </p>
-        <p className="text-xs text-zinc-600 dark:text-zinc-400">
-          {scoreLabel(match.overall_score)}
-        </p>
+        <p className="text-xs text-muted">{scoreLabel(match.overall_score)}</p>
       </div>
 
       <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
         {LEVEL_ORDER.filter((level) => match.by_level[level].total > 0).map(
           (level) => (
             <div key={level} className="flex gap-1">
-              <dt className="text-zinc-600 dark:text-zinc-400">
-                {LEVEL_LABELS[level]}
-              </dt>
-              <dd className="font-medium tabular-nums text-black dark:text-zinc-50">
+              <dt className="text-muted">{LEVEL_LABELS[level]}</dt>
+              <dd className="font-medium tabular-nums text-foreground">
                 {match.by_level[level].matched} / {match.by_level[level].total}
               </dd>
             </div>
@@ -156,7 +152,7 @@ export default function JobMatchPanel({
         // is unmet. This is what makes that unmistakable.
         <p
           role="status"
-          className="rounded bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+          className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning"
         >
           <span className="font-medium">
             Missing {match.required_missing.length} required{" "}
@@ -168,7 +164,7 @@ export default function JobMatchPanel({
 
       {match.matched_skills.length > 0 && (
         <section className="flex flex-col gap-1">
-          <h5 className="text-xs font-semibold text-black dark:text-zinc-50">
+          <h5 className="text-xs font-semibold text-foreground">
             Matched skills ({match.matched_skills.length})
           </h5>
           <ul className="flex flex-col gap-1">
@@ -181,7 +177,7 @@ export default function JobMatchPanel({
 
       {match.missing_skills.length > 0 && (
         <section className="flex flex-col gap-1">
-          <h5 className="text-xs font-semibold text-black dark:text-zinc-50">
+          <h5 className="text-xs font-semibold text-foreground">
             Missing skills ({match.missing_skills.length})
           </h5>
           <ul className="flex flex-col gap-1">
@@ -192,7 +188,7 @@ export default function JobMatchPanel({
         </section>
       )}
 
-      <p className="text-xs text-zinc-500 dark:text-zinc-500">
+      <p className="text-xs text-muted">
         Scored by {match.formula_version}: {match.earned_weight} of{" "}
         {match.obtainable_weight} weighted points.
       </p>
@@ -204,18 +200,18 @@ function MatchedRow({ skill }: { skill: MatchedSkill }) {
   return (
     <li className="text-xs">
       <details>
-        <summary className="cursor-pointer text-zinc-800 dark:text-zinc-200">
+        <summary className="cursor-pointer text-foreground">
           {/* The tick is decorative; the word "Matched" carries the
               meaning for assistive technology. */}
           <span aria-hidden="true">✓ </span>
           <span className="sr-only">Matched: </span>
           <span className="font-medium">{skill.skill_name}</span>{" "}
-          <span className="text-zinc-500 dark:text-zinc-500">
+          <span className="text-muted">
             · {LEVEL_LABELS[skill.requirement_level]}
             {skill.candidate_unreviewed && " · needs review"}
           </span>
         </summary>
-        <div className="mt-1 flex flex-col gap-1 pl-4 text-zinc-600 dark:text-zinc-400">
+        <div className="mt-1 flex flex-col gap-1 pl-4 text-muted">
           <p>
             <span className="font-medium">This job:</span> “{skill.job_excerpt}”
           </p>
@@ -242,18 +238,18 @@ function MissingRow({ skill }: { skill: MissingSkill }) {
   return (
     <li className="text-xs">
       <details>
-        <summary className="cursor-pointer text-zinc-800 dark:text-zinc-200">
+        <summary className="cursor-pointer text-foreground">
           <span aria-hidden="true">✗ </span>
           <span className="sr-only">Missing: </span>
           <span className="font-medium">{skill.skill_name}</span>{" "}
-          <span className="text-zinc-500 dark:text-zinc-500">
+          <span className="text-muted">
             · {LEVEL_LABELS[skill.requirement_level]}
             {/* "You rejected this" and "you don't have this" are
                 different messages. */}
             {skill.candidate_rejected && " · you rejected this"}
           </span>
         </summary>
-        <div className="mt-1 pl-4 text-zinc-600 dark:text-zinc-400">
+        <div className="mt-1 pl-4 text-muted">
           <p>
             <span className="font-medium">This job:</span> “{skill.job_excerpt}”
           </p>

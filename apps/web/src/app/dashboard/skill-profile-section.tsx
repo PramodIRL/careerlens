@@ -110,7 +110,7 @@ export default function SkillProfileSection({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading your skill profile…
       </p>
     );
@@ -125,7 +125,7 @@ export default function SkillProfileSection({
     return (
       <p
         role="alert"
-        className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+        className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
       >
         {error}
       </p>
@@ -138,7 +138,7 @@ export default function SkillProfileSection({
 
   if (summary.total === 0 && summary.rejected === 0) {
     return (
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p className="text-sm text-muted">
         No evidence yet. Upload a resume or import your GitHub repositories to
         build your skill profile.
       </p>
@@ -150,7 +150,7 @@ export default function SkillProfileSection({
       {error && (
         <p
           role="alert"
-          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
         >
           {error}
         </p>
@@ -163,19 +163,19 @@ export default function SkillProfileSection({
       </div>
 
       <section className="flex flex-col gap-1">
-        <h3 className="text-sm font-semibold text-black dark:text-zinc-50">
+        <h3 className="text-sm font-semibold text-foreground">
           Where your evidence comes from
         </h3>
         {/* Counts distinct skills per source, not evidence rows — one
             repository can produce several rows for a single skill. */}
-        <p className="text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="text-xs text-muted">
           Number of skills each source supports.
         </p>
         <ul className="mt-1 flex flex-col gap-1">
           {SOURCE_ORDER.map((source) => (
             <li
               key={source}
-              className="flex justify-between text-sm text-zinc-700 dark:text-zinc-300"
+              className="flex justify-between text-sm text-foreground/80"
             >
               <span>{SOURCE_LABELS[source]}</span>
               <span className="font-medium tabular-nums">
@@ -187,7 +187,7 @@ export default function SkillProfileSection({
       </section>
 
       {summary.multi_source > 0 && (
-        <p className="rounded bg-zinc-100 px-3 py-2 text-sm text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+        <p className="rounded-lg bg-surface-2 px-3 py-2 text-sm text-foreground/80">
           <span className="font-medium">{summary.multi_source}</span>{" "}
           {summary.multi_source === 1 ? "skill is" : "skills are"} backed by
           more than one source.
@@ -195,7 +195,7 @@ export default function SkillProfileSection({
       )}
 
       {summary.rejected > 0 && (
-        <p className="text-xs text-zinc-500 dark:text-zinc-500">
+        <p className="text-xs text-muted">
           {summary.rejected} rejected{" "}
           {summary.rejected === 1 ? "skill" : "skills"} not shown here.
         </p>
@@ -204,7 +204,7 @@ export default function SkillProfileSection({
       <button
         type="button"
         onClick={load}
-        className="self-start rounded border border-zinc-300 px-3 py-1 text-sm text-black dark:border-zinc-700 dark:text-zinc-50"
+        className="self-start rounded-lg border border-border px-3 py-1 text-sm text-foreground hover:bg-surface-2"
       >
         Refresh
       </button>
@@ -215,10 +215,10 @@ export default function SkillProfileSection({
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex flex-col">
-      <span className="text-2xl font-semibold tabular-nums text-black dark:text-zinc-50">
+      <span className="text-2xl font-semibold tabular-nums text-foreground">
         {value}
       </span>
-      <span className="text-xs text-zinc-500 dark:text-zinc-500">{label}</span>
+      <span className="text-xs text-muted">{label}</span>
     </div>
   );
 }

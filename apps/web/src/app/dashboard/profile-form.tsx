@@ -133,7 +133,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading profile…
       </p>
     );
@@ -150,13 +150,13 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
           ref={errorRef}
           role="alert"
           tabIndex={-1}
-          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
         >
           {error}
         </p>
       )}
       {saved && !error && (
-        <p role="status" className="text-sm text-green-700 dark:text-green-400">
+        <p role="status" className="text-sm text-success">
           Profile saved.
         </p>
       )}
@@ -164,7 +164,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
       <div className="flex flex-col gap-1">
         <label
           htmlFor="full_name"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Full name
         </label>
@@ -174,14 +174,14 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
           onChange={(e) =>
             setForm((prev) => ({ ...prev, fullName: e.target.value }))
           }
-          className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+          className="rounded-lg border border-border px-3 py-2"
         />
       </div>
 
       <div className="flex flex-col gap-1">
         <label
           htmlFor="headline"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Headline
         </label>
@@ -191,16 +191,13 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
           onChange={(e) =>
             setForm((prev) => ({ ...prev, headline: e.target.value }))
           }
-          className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+          className="rounded-lg border border-border px-3 py-2"
         />
       </div>
 
       <div className="flex gap-4">
-        <div className="flex flex-1 flex-col gap-1">
-          <label
-            htmlFor="city"
-            className="text-sm font-medium text-black dark:text-zinc-50"
-          >
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <label htmlFor="city" className="text-sm font-medium text-foreground">
             City
           </label>
           <input
@@ -209,13 +206,13 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
             onChange={(e) =>
               setForm((prev) => ({ ...prev, city: e.target.value }))
             }
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="rounded-lg border border-border px-3 py-2"
           />
         </div>
-        <div className="flex flex-1 flex-col gap-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <label
             htmlFor="country"
-            className="text-sm font-medium text-black dark:text-zinc-50"
+            className="text-sm font-medium text-foreground"
           >
             Country
           </label>
@@ -225,7 +222,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
             onChange={(e) =>
               setForm((prev) => ({ ...prev, country: e.target.value }))
             }
-            className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+            className="rounded-lg border border-border px-3 py-2"
           />
         </div>
       </div>
@@ -233,7 +230,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
       <div className="flex flex-col gap-1">
         <label
           htmlFor="experience_level"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Experience level
         </label>
@@ -246,7 +243,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
               experienceLevel: e.target.value as ExperienceLevel | "",
             }))
           }
-          className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+          className="rounded-lg border border-border px-3 py-2"
         >
           <option value="">Not set</option>
           {EXPERIENCE_LEVELS.map((level) => (
@@ -260,7 +257,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
       <div className="flex flex-col gap-1">
         <label
           htmlFor="target_roles"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Target roles
         </label>
@@ -272,12 +269,9 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
           }
           placeholder="Backend Engineer, SRE"
           aria-describedby="target_roles-hint"
-          className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+          className="rounded-lg border border-border px-3 py-2"
         />
-        <p
-          id="target_roles-hint"
-          className="text-xs text-zinc-500 dark:text-zinc-500"
-        >
+        <p id="target_roles-hint" className="text-xs text-muted">
           Comma-separated.
         </p>
       </div>
@@ -285,7 +279,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
       <div className="flex flex-col gap-1">
         <label
           htmlFor="target_skills"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Target skills
         </label>
@@ -297,12 +291,9 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
           }
           placeholder="Python, SQL"
           aria-describedby="target_skills-hint"
-          className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
+          className="rounded-lg border border-border px-3 py-2"
         />
-        <p
-          id="target_skills-hint"
-          className="text-xs text-zinc-500 dark:text-zinc-500"
-        >
+        <p id="target_skills-hint" className="text-xs text-muted">
           Comma-separated.
         </p>
       </div>
@@ -310,7 +301,7 @@ export default function ProfileForm({ accessToken, userId }: ProfileFormProps) {
       <button
         type="submit"
         disabled={saving}
-        className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
+        className="rounded-lg bg-accent px-4 py-2 text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90"
       >
         {saving ? "Saving…" : "Save profile"}
       </button>

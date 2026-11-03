@@ -157,7 +157,7 @@ export default function SkillsSection({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-sm text-muted">
         Loading skills…
       </p>
     );
@@ -168,7 +168,7 @@ export default function SkillsSection({
       {error && (
         <p
           role="alert"
-          className="rounded bg-red-100 px-3 py-2 text-sm text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger"
         >
           {error}
         </p>
@@ -177,7 +177,7 @@ export default function SkillsSection({
       <form onSubmit={handleAdd} className="flex flex-col gap-1">
         <label
           htmlFor="add-skill"
-          className="text-sm font-medium text-black dark:text-zinc-50"
+          className="text-sm font-medium text-foreground"
         >
           Add a skill
         </label>
@@ -188,20 +188,17 @@ export default function SkillsSection({
             onChange={(event) => setNewSkill(event.target.value)}
             disabled={adding}
             aria-describedby="add-skill-hint"
-            className="min-w-0 flex-1 rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="min-w-0 flex-1 rounded-lg border border-border px-3 py-2 text-sm"
           />
           <button
             type="submit"
             disabled={adding || !newSkill.trim()}
-            className="shrink-0 rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-black"
+            className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground disabled:opacity-50 font-medium shadow-sm hover:bg-accent/90"
           >
             {adding ? "Adding…" : "Add"}
           </button>
         </div>
-        <p
-          id="add-skill-hint"
-          className="text-xs text-zinc-500 dark:text-zinc-500"
-        >
+        <p id="add-skill-hint" className="text-xs text-muted">
           Must be a skill we recognise, such as “Python” or “k8s”.
         </p>
       </form>
@@ -209,13 +206,13 @@ export default function SkillsSection({
       <button
         type="button"
         onClick={load}
-        className="self-start rounded border border-zinc-300 px-3 py-1 text-sm text-black dark:border-zinc-700 dark:text-zinc-50"
+        className="self-start rounded-lg border border-border px-3 py-1 text-sm text-foreground hover:bg-surface-2"
       >
         Refresh
       </button>
 
       {skills.length === 0 ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="text-sm text-muted">
           No skills yet. Upload a resume, import your GitHub repositories, or
           add one above.
         </p>
@@ -225,27 +222,23 @@ export default function SkillsSection({
           if (group.length === 0) return null;
           return (
             <section key={status} className="flex flex-col gap-2">
-              <h3 className="text-sm font-semibold text-black dark:text-zinc-50">
+              <h3 className="text-sm font-semibold text-foreground">
                 {heading} ({group.length})
               </h3>
-              {hint && (
-                <p className="text-xs text-zinc-500 dark:text-zinc-500">
-                  {hint}
-                </p>
-              )}
+              {hint && <p className="text-xs text-muted">{hint}</p>}
               <ul className="flex flex-col gap-2">
                 {group.map((skill) => (
                   <li
                     key={skill.id}
-                    className="rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700"
+                    className="rounded-lg border border-border px-3 py-2 bg-surface-2/40"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-black dark:text-zinc-50">
+                        <p className="truncate text-sm font-medium text-foreground">
                           {skill.skill_name}
                         </p>
                         {skill.skill_category && (
-                          <p className="text-xs text-zinc-500 dark:text-zinc-500">
+                          <p className="text-xs text-muted">
                             {skill.skill_category}
                           </p>
                         )}
@@ -256,7 +249,7 @@ export default function SkillsSection({
                             type="button"
                             disabled={busyId === skill.id}
                             onClick={() => decide(skill.id, "confirmed")}
-                            className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 disabled:opacity-50 dark:border-green-800 dark:text-green-400"
+                            className="rounded-lg border border-success/40 px-2 py-1 text-xs text-success disabled:opacity-50 hover:bg-success/10"
                           >
                             {skill.status === "rejected"
                               ? "Restore"
@@ -268,7 +261,7 @@ export default function SkillsSection({
                             type="button"
                             disabled={busyId === skill.id}
                             onClick={() => decide(skill.id, "rejected")}
-                            className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 disabled:opacity-50 dark:border-red-800 dark:text-red-400"
+                            className="rounded-lg border border-danger/40 px-2 py-1 text-xs text-danger disabled:opacity-50 hover:bg-danger/10"
                           >
                             Reject
                           </button>
@@ -281,10 +274,7 @@ export default function SkillsSection({
                         show why it was inferred. */}
                     <ul className="mt-2 flex flex-col gap-1">
                       {skill.evidence.map((item) => (
-                        <li
-                          key={item.id}
-                          className="text-xs text-zinc-600 dark:text-zinc-400"
-                        >
+                        <li key={item.id} className="text-xs text-muted">
                           <span className="font-medium">
                             {SOURCE_LABELS[item.source_type] ??
                               item.source_type}
@@ -298,7 +288,7 @@ export default function SkillsSection({
                           {item.source_label && <> · {item.source_label}</>} ·{" "}
                           {confidenceLabel(item.confidence)}
                           {item.excerpt && (
-                            <blockquote className="mt-1 border-l-2 border-zinc-300 pl-2 italic dark:border-zinc-700">
+                            <blockquote className="mt-1 border-l-2 border-border pl-2 italic">
                               {item.excerpt}
                             </blockquote>
                           )}

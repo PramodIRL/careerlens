@@ -122,7 +122,7 @@ export default function JobGapPanel({
 
   if (loading) {
     return (
-      <p role="status" className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p role="status" className="text-xs text-muted">
         Checking skill gaps…
       </p>
     );
@@ -132,7 +132,7 @@ export default function JobGapPanel({
     return (
       <p
         role="alert"
-        className="rounded bg-red-100 px-3 py-2 text-xs text-red-800"
+        className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
       >
         {error}
       </p>
@@ -145,7 +145,7 @@ export default function JobGapPanel({
     // NOT "you match everything" — the job simply asks for nothing we
     // recognise, which is a fact about the JOB, not the candidate.
     return (
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
+      <p className="text-xs text-muted">
         No skill requirements detected in this job description.
       </p>
     );
@@ -158,26 +158,24 @@ export default function JobGapPanel({
       {error && (
         <p
           role="alert"
-          className="rounded bg-red-100 px-3 py-2 text-xs text-red-800"
+          className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
         >
           {error}
         </p>
       )}
 
       {!hasAnyGap ? (
-        <p className="text-xs text-zinc-700 dark:text-zinc-300">
+        <p className="text-xs text-foreground/80">
           No gaps — you match every requirement.
         </p>
       ) : (
         SECTIONS.filter((section) => gaps[section.key].length > 0).map(
           (section) => (
             <section key={section.key} className="flex flex-col gap-1">
-              <h5 className="text-xs font-semibold text-black dark:text-zinc-50">
+              <h5 className="text-xs font-semibold text-foreground">
                 {section.heading} ({gaps[section.key].length})
               </h5>
-              <p className="text-xs text-zinc-500 dark:text-zinc-500">
-                {section.hint}
-              </p>
+              <p className="text-xs text-muted">{section.hint}</p>
               <ul className="flex flex-col gap-1">
                 {gaps[section.key].map((entry) => (
                   <GapRow key={entry.skill_id} entry={entry} />
@@ -188,7 +186,7 @@ export default function JobGapPanel({
         )
       )}
 
-      <p className="text-xs text-zinc-500 dark:text-zinc-500">
+      <p className="text-xs text-muted">
         {gaps.totals.satisfied} of {gaps.totals.total_requirements} requirements
         satisfied · {gaps.formula_version}
       </p>
@@ -200,13 +198,13 @@ function GapRow({ entry }: { entry: GapEntry }) {
   return (
     <li className="text-xs">
       <details>
-        <summary className="cursor-pointer text-zinc-800 dark:text-zinc-200">
+        <summary className="cursor-pointer text-foreground">
           <span className="font-medium">{entry.skill_name}</span>{" "}
-          <span className="text-zinc-500 dark:text-zinc-500">
+          <span className="text-muted">
             · {LEVEL_LABELS[entry.requirement_level]} · {candidateLine(entry)}
           </span>
         </summary>
-        <div className="mt-1 flex flex-col gap-1 pl-4 text-zinc-600 dark:text-zinc-400">
+        <div className="mt-1 flex flex-col gap-1 pl-4 text-muted">
           <p>
             <span className="font-medium">This job:</span> “{entry.job_excerpt}”
           </p>
